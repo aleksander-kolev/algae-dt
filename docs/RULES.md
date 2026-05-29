@@ -17,20 +17,29 @@ runtime failure), **C) coding & process conventions**.
    arena; one person in the arena at a time; prop wheels off the table if testing at a desk; never
    disassemble or add/remove components; handle LiPo batteries with care, report swelling/smell/beeps.
 5. **Shut the robot down properly** (`sudo shutdown now` on the Pi) **before** the power switch.
-6. **Back up every session** — the laptop may be factory-reset without notice. Commit to git + copy
-   to OneDrive/USB before leaving.
-7. **Lab = testing, home = development.** Do not plan to write/iterate code in the lab.
+6. **Back up every session — carry a USB.** The laptop may be factory-reset without notice AND a
+   freshly-wiped laptop may not reach OneDrive/git (sign-in under no-admin/network limits). So a USB
+   stick with the `algae_dt` package + rebuild commands is **mandatory**, not just git/OneDrive.
+7. **Lab = testing, home = development.** Do not write/iterate code in the lab. In the lab, build
+   ONLY our package: `colcon build --packages-select algae_dt`. The full `rm -rf build/ install/
+   log/ && colcon build` is reserved for the documented "dirty symlink" failure (never the default —
+   it rebuilds the whole turtlebot3 workspace and burns testing time).
 8. **Attendance:** 2–3 members per session, rotating. Decide roles (driver/spotter/logger/presenter)
-   before arriving; bring a 30–60 min test plan (see `docs/PLAN.md`).
+   before arriving; bring a 30–60 min test plan (see `docs/PLAN.md`). **End-of-session:** the logger
+   confirms the robot was shut down properly (`sudo shutdown now` on the Pi) before the power switch.
 
 ## B. Technical invariants (verified — each one, broken, fails silently)
-1. **Jazzy `/cmd_vel` is `geometry_msgs/TwistStamped`** (real bringup AND turtlebot3_gazebo). Our
-   mediator publishes TwistStamped to `/cmd_vel`. If you ever need plain `Twist`, that's a deliberate
-   `enable_stamped_cmd_vel:=false` choice — don't mix types.
-2. **If Nav2's controller drives the command bus, set `enable_stamped_cmd_vel: true`** on
-   `controller_server`/`behavior_server`/`velocity_smoother`, else Nav2 publishes plain `Twist`, the
-   types mismatch our TwistStamped subscriber, and **the robot activates but never moves** (silent).
-   We remap Nav2 controller `cmd_vel` → `/dt/cmd_vel_raw` so the mediator is the single chokepoint.
+1. **cmd_vel type contract — `/dt/cmd_vel_raw` is plain `Twist`; the real `/cmd_vel` is TwistStamped.**
+   On Jazzy the real bringup expects `TwistStamped` on `/cmd_vel`. We keep the pre-safety bus
+   `/dt/cmd_vel_raw` as plain **`Twist`** (what teleop, the GUI, and Nav2's controller all publish by
+   default) and the **mediator is the ONLY thing that stamps** → publishes `TwistStamped` to the real
+   `/cmd_vel`. A ROS topic has ONE type, so never publish both `Twist` and `TwistStamped` to
+   `/dt/cmd_vel_raw`. (`/sim/cmd_vel` type is verified at runtime: `ros2 topic type /sim/cmd_vel`.)
+2. **Do NOT rely on Nav2's `enable_stamped_cmd_vel`.** Because the mediator does the stamping, Nav2
+   stays default (plain `Twist`) — this removes the old "activates-but-never-moves" trap entirely. We
+   **remap Nav2's controller `cmd_vel` → `/dt/cmd_vel_raw` in the launch** (via `SetRemap` around the
+   `turtlebot3_navigation2` include — NOT on `mission_runner`, which is a BasicNavigator action client
+   and publishes no `cmd_vel`). The mediator is thus the single safety chokepoint for autonomy too.
 3. **Topic-collision rule (course-stated):** real and sim must NEVER publish the same topic name.
    Real = bare (`/scan /odom /cmd_vel /tf`), sim = `/sim/*`, sim TF off the global `/tf` in `both`.
 4. **`use_sim_time:=true` ONLY in `sim_only`.** In `real_only`/`both` the real robot leads on wall

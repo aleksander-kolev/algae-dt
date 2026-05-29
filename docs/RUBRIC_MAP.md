@@ -21,6 +21,9 @@
 
 **Evidence:** `ros2 topic list` + `rqt_graph`; `ros2 topic echo` showing live traffic each direction;
 a command typed in teleop/GUI moves BOTH robots; an obstacle in either world is reflected in the DT.
+**Hardware-independent demo (de-risks the High robot-unavailability risk):** the ported `fake_robot.py`
+publishes the real robot's bare `/scan /odom /cmd_vel /battery_state`, so the real→digital and
+digital→real arrows are demonstrable at home without a robot.
 **Demo step:** drive via GUI → both robots move; show the topic graph fanning out.
 **Full marks bar:** ≥ 1 topic each direction, live, through a single mediator (not direct wiring).
 
@@ -29,8 +32,12 @@ a command typed in teleop/GUI moves BOTH robots; an obstacle in either world is 
 - Real-time pose sync real↔sim (mirror real pose into sim; both follow the DT command bus).
 - **Measured** `/dt/sync_error` (Δxy, Δyaw, sensor delta) and `/dt/latency_ms` (command→motion, scan
   age) — *numbers, published & logged to CSV*.
-- **Documented tolerance thresholds** in `config/twin.yaml` (`tol_pose_xy_m`, latency budget…).
+- **Documented tolerance thresholds + rationale** in `config/twin.yaml` (`tol_pose_xy_m`,
+  `latency_budget_ms`, `stop_skew_ms`…).
 - **Alerts/logging when out of tolerance:** `/dt/alerts` (String) + CSV row + GUI banner amber/red.
+- **Demonstrable in `sim_only` (the fallback env):** with no real robot, sync error = COMMANDED
+  (integrated from `/dt/cmd_vel_raw`) vs ACHIEVED sim pose (`sim_only_sync_source: commanded`) — so
+  pillar ② is shown even without hardware. Latency = mediator command stamp → sim motion onset.
 
 **Evidence:** the generated `sync_metrics_<run>.csv`; a screenshot/recording of the GUI sync banner
 going amber when you nudge the sim out of tolerance; `ros2 topic echo /dt/alerts` firing on cue.
@@ -46,9 +53,11 @@ going amber when you nudge the sim out of tolerance; `ros2 topic echo /dt/alerts
   sim mirrors the interaction. (Optional stretch: push/transport an object to satisfy the course's
   "Object Manipulation/Transport" row literally.)
 
-**Evidence:** put a box in front in either world → both stop; add a dynamic obstacle → Nav2 reroutes;
-bloom turns green only after a full spray. **Demo step:** all three on one run.
-**Full marks bar:** at least one robust interaction synchronous across both robots; we show three.
+**Evidence:** put a box in front in either world → both stop (and the **measured `stop_skew_ms`** real
+vs sim is logged — synchrony is quantified, not just claimed); add a dynamic obstacle (scripted/teleoped
+in sim) → Nav2 reroutes; bloom turns green only after a full spray. **Demo step:** all three on one run.
+**Full marks bar:** at least one robust interaction synchronous across both robots (skew within
+`stop_skew_ms`); we show three.
 
 ### Safety headline (cross-cutting, strengthens all three)
 Latched `/dt/estop` halts both robots + cancels the Nav2 goal + latches until RESUME; auto-E-STOP on
@@ -78,11 +87,13 @@ critical battery. Demoed explicitly.
 ## 12/12 evidence checklist (tick before each review)
 - [ ] `ros2 topic list` + `rqt_graph` screenshot showing fan-in/fan-out.
 - [ ] `ros2 topic echo` captures: one real→digital, one digital→real, one digital→sim, one sim→digital.
-- [ ] `sync_metrics_<run>.csv` with Δxy/Δyaw/latency columns; a row where alert fired.
+- [ ] `sync_metrics_<run>.csv` with Δxy/Δyaw/latency + `stop_skew_ms` columns; a row where alert fired.
 - [ ] Clip: GUI sync banner amber/red + `/dt/alerts` when out of tolerance.
-- [ ] Clip: obstacle in real OR sim → both robots stop (25 cm).
+- [ ] Clip: obstacle in real OR sim → both robots stop (25 cm); measured stop-skew within `stop_skew_ms`.
 - [ ] Clip: Nav2 reroute around a dynamic obstacle.
 - [ ] Clip: bloom green only after full 5 s spray; nav-failed bloom grey.
 - [ ] Clip: E-STOP halts both + latches; RESUME recovers.
 - [ ] Tolerance thresholds documented in `config/twin.yaml` (with rationale comments).
+- [ ] Context diagram (`docs/CONTEXT_DIAGRAM.md`) rendered for the Week-4 review.
+- [ ] `sim_only` baseline video pre-recorded as the guaranteed backup (T6.3).
 - [ ] Risk assessment (`docs/PLAN.md` §Risk) covering hardware availability/reliability/usability.

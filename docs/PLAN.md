@@ -4,10 +4,29 @@ Built the course way: **develop at home in `sim_only`; the lab is for testing on
 sessions (Weeks 2–9), **technical reviews Week 4 & Week 8**, **video Week 9**. Everything is TDD on
 pure libs, integration-tested in `sim_only` before it ever goes to the lab. Task IDs `T#`.
 
+> **Rubric caveat:** the 12/12 target assumes the 3×4 DT triad (`docs/RUBRIC_MAP.md`). **Cross-check
+> the exact weighting on the Canvas "Final Submission and Rubric" + Technical Review doc before the
+> Week-4 review** and adjust phase priorities if the weights differ.
+
 > Migration note: port reusable logic from the old `algae-twin` repo's pure libs
 > (`geometry/safety/blooms/sync/pgm`) — they're ROS-free and already unit-tested — and DROP all the
 > robot-description scaffolding (SDF/URDF/`ground_truth_localizer`/custom teleop/Nav2 params), which
 > the stock turtlebot3 packages now provide.
+>
+> Blueprint: this project IS the course **"DT Example with Gazebo and Physical Robot.pdf"** (Lidar
+> DT, Mini-Projects 1–3) generalised to autonomy. The provided `tb3_safety_stop` is the seed of our
+> `twin_mediator`. Coverage of every course file → `docs/COURSE_COVERAGE.md`.
+
+## Proof of Concept framing (course "Intro to Technical Solutions and the PoC")
+This deliverable IS our **Proof of Concept**. After **Phase 3 — Scope of PoC** approval, the feature
+list below is the **backlog** (course 2IP90-style Todo). For each backlog item we record: technical
+knowledge needed, whether hardware is actually required (most is `sim_only`), and the return on time
+(drop a feature rather than sink the project — sunk-cost warning). **Take Option A** (full lab
+participation → full rubric potential); Option B caps the score and would be declared in writing.
+
+**Team knowledge prerequisites (acquire before Lab 1):** Linux + CLI, SSH, the **publish/subscribe
+pattern** (course **"Simple Publisher & Subscriber.pdf"** + `subscriber_node`/`publisher_node`
+downloads — our nodes are exactly pub/sub built on this primitive), ROS 2 topics/nodes, basic Gazebo.
 
 ---
 
@@ -18,11 +37,23 @@ pure libs, integration-tested in `sim_only` before it ever goes to the lab. Task
   `package.xml`, `setup.py`, entry points, `config/twin.yaml`, `worlds/algae_arena.world`,
   `maps/map.{pgm,yaml}`, `launch/bringup.launch.py`, `lib/`, `test/`). **Builds clean.** ✅ scaffolded
 - **T0.3** `colcon build --packages-select algae_dt` + `pytest` green on the stubs/ported libs.
-- **Exit:** package builds + installs in the container; stubs run and log "not yet implemented".
+- **T0.4** **Context diagram** (course "Introduction to Context Diagrams") → `docs/CONTEXT_DIAGRAM.md`:
+  the DT system boundary, external entities (operator, real robot, sim, online source), and the
+  topic flows in/out of the mediator. Bring it to the Week-4 review as evidence.
+- **T0.5** **Per-member readiness gate:** EACH team member independently (a) completes the SETUP §0/§1
+  environment, (b) runs `sim_only` from a fresh clone, and (c) does the SETUP §3 connect flow against
+  a sim stand-in. Tick per person — this is the real mitigation for "key member absent", not a claim.
+- **Exit:** package builds + installs in the container; stubs run and log "not yet implemented";
+  context diagram drafted; every member has run `sim_only` solo.
 
 ## Phase 1 — Simulation Setup + command bus  (Lab-1 ready; home)  → Rubric ③ start
 - **T1.1** `bringup.launch.py mode:=sim_only` brings up `turtlebot3_gazebo` with our
-  `algae_arena.world` + `turtlebot3_navigation2` (`use_sim_time:=true`, our `map.yaml`).
+  `algae_arena.world` (gz_sim + spawn + robot_state_publisher + ros_gz bridge; confirm `/clock` and
+  `/sim/scan` flow) + `turtlebot3_navigation2` (`use_sim_time:=true`, our `map.yaml`). **Auto-seed
+  AMCL** for sim_only: set `set_initial_pose: true` + `initial_pose.{x,y,yaw}` to the Gazebo spawn
+  pose in a Nav2 `params_file` (no human 2D-Pose-Estimate at home), else goals plan from an
+  unlocalized tree and blooms get skipped. Verify stock launch arg names (`use_sim_time`, `map`,
+  `params_file`) empirically in the container.
 - **T1.2** Stock `turtlebot3_teleop` remapped `-r /cmd_vel:=/dt/cmd_vel_raw`; confirm the sim robot
   moves via the command bus.
 - **T1.3** `lib/safety.py` (porting old) — front-sector min-range, fail-safe staleness. **TDD first.**
@@ -34,7 +65,10 @@ pure libs, integration-tested in `sim_only` before it ever goes to the lab. Task
 - **T2.1** `lib/geometry.py`, `lib/blooms.py` (immutable) ported + TDD (world↔pixel, nearest-untreated).
 - **T2.2** `mission_runner`: `BasicNavigator` to each bloom centre → 5 s spin-spray on
   `/dt/cmd_vel_raw`; `/dt/markers`, `/dt/mission_state`; honest accounting (no-spray-on-failure,
-  aborted→pending). Remap Nav2 controller `cmd_vel`→`/dt/cmd_vel_raw`; `enable_stamped_cmd_vel:=true`.
+  aborted→pending). **The Nav2 controller `cmd_vel`→`/dt/cmd_vel_raw` remap is done in the LAUNCH
+  (SetRemap around the `turtlebot3_navigation2` include), NOT on `mission_runner`** (which publishes
+  no cmd_vel). Keep Nav2 default (plain `Twist`) — the mediator stamps for the real robot, so
+  `enable_stamped_cmd_vel` is NOT needed (RULES §B-1/B-2).
 - **T2.3** `twin_mediator` v2: full fan-out `/dt/cmd_vel_raw`→`/cmd_vel`+`/sim/cmd_vel`; mirrors
   `/odom`→`/dt/real_pose`, sim pose→`/dt/sim_pose`, battery→`/dt/health`; `/dt/scan_active`,
   `/dt/odom_active`; latched `/dt/estop` + auto-E-STOP on critical battery.
@@ -42,23 +76,45 @@ pure libs, integration-tested in `sim_only` before it ever goes to the lab. Task
   E-STOP halts + latches. Integration test with unique `ROS_DOMAIN_ID`.
 
 ## Phase 3 — State sync + tolerances + alerts  (home)  → Rubric ② (the differentiator)
-- **T3.1** `lib/sync.py` + `lib/metrics.py` (TDD): pose discrepancy (Δxy, Δyaw), sensor delta,
-  latency (command→motion, scan age), tolerance comparison, CSV row formatting.
+- **T3.1** `lib/sync.py` + `lib/metrics.py` (TDD). Define the measurements concretely (don't
+  hand-wave the latency number — it's the highest-value graded item):
+  - **pose discrepancy** Δxy, Δyaw between `/dt/real_pose` and `/dt/sim_pose`; **sensor delta** front-range.
+  - **command→motion latency:** the mediator stamps each `/dt/cmd_vel_raw` it forwards; the supervisor
+    marks motion onset when `|odom.twist.linear|>motion_eps_mps` OR `|angular|>motion_eps_radps`
+    (params in twin.yaml) and reports `t_motion − t_cmd` (clock = sim time in `sim_only`). Unit-tested.
+  - **sim_only sync source (so pillar ② is demonstrable in the fallback env):** with no real robot,
+    the "shadow real pose" is the COMMANDED pose integrated from `/dt/cmd_vel_raw`; sync error =
+    commanded-vs-achieved sim pose (`sim_only_sync_source: commanded` in twin.yaml) — same trick as
+    the synthetic battery.
 - **T3.2** `sync_supervisor`: publish `/dt/sync_error`, `/dt/latency_ms`, `/dt/sync_ok`; **append CSV**
-  `sync_metrics_<run>.csv`; **publish `/dt/alerts` when out of tolerance**; thresholds from
-  `config/twin.yaml` (documented with rationale).
-- **Exit:** induce a discrepancy → `/dt/sync_ok` flips, `/dt/alerts` fires, CSV logs it.
+  `sync_metrics_<run>.csv`; **publish `/dt/alerts` when out of tolerance**; thresholds (+ rationale)
+  from `config/twin.yaml`. Also capture `stop_skew_ms` (real-stop vs sim-stop time delta) on safety
+  events → CSV, so pillar ③ "synchronous" is MEASURED, not just asserted.
+- **Exit:** induce a discrepancy → `/dt/sync_ok` flips, `/dt/alerts` fires, CSV logs it (in `sim_only`
+  via the commanded shadow pose).
 
 ## Phase 4 — Operator GUI  (home)
 - **T4.1** `lib/pgm.py` ported + TDD (P5/P2 → grayscale). **T4.2** `operator_gui` (PyQt5): map canvas,
   real+sim pose overlay, live `/dt/scan_active`, bloom markers (pending/active/done/grey),
   click-to-place→`/dt/blooms`, Start/Stop/Clear/E-STOP, banners (mode/sync/latency/battery/safety/
   mission). Subscribes `/dt/*` only; QTimer `spin_once`. Headless test with `QT_QPA_PLATFORM=offscreen`.
-- **Exit:** full `sim_only` demo drivable from the GUI alone. **← target state for Week-4 review.**
+- **Exit:** full `sim_only` demo drivable from the GUI alone. **← Week-4 review bar = Phases 1–4
+  complete: bidirectional fan-out + Simulation Setup + a measured sim_only sync number (Phase 3) +
+  GUI.** (Phase 3 precedes Phase 4, so finishing Phase 4 guarantees the "basic sync number" the
+  Week-4 checkpoint asks for.)
 
 ## Phase 5 — `both` mode + real-robot integration  (home build, LAB test)  → all pillars on hardware
-- **T5.1** Namespace `turtlebot3_gazebo` to `/sim/*` (push namespace + bridge remaps; sim TF→`/sim/tf`).
-  Enforce the topic-collision rule. Hardest integration task — budget a full home session.
+- **T5.1** Namespace `turtlebot3_gazebo` to `/sim/*`. This is MORE than a namespace push: the sim
+  topics come from the **ros_gz bridge**, so you must **remap each bridged topic** (a `PushRosNamespace`
+  won't rename gz-side topics), and decide TF handling. Simplest correct approach for `both`: the sim
+  is a **visual mirror only (no sim Nav2)** — drive it via `/sim/cmd_vel` + ground-truth `/sim/odom`,
+  keep sim TF on `/sim/tf` OFF the global `/tf`, and avoid frame-name collisions entirely (don't put
+  sim `base_link`/`odom`/`map` on the global tree). Hardest integration task — budget a full home session.
+- **T5.1b** **Validate the topic-collision rule entirely in sim BEFORE the lab:** port the old repo's
+  `fake_robot.py` as a stand-in that publishes the real robot's BARE topics (`/scan /odom /cmd_vel
+  /battery_state`), run it alongside the `/sim/*` sim, and confirm no collision + the fan-out hits
+  both. This de-risks `both` (and exercises pillar ①'s real→digital/digital→real arrows) without
+  spending scarce lab time — and gives a hardware-independent ① demo for the reviews.
 - **T5.2** `mode:=both`: real leads (wall time), sim mirrors 1:1 via the mediator fan-out.
 - **T5.3** `mode:=real_only`: robot bringup (Pi) + `turtlebot3_navigation2` (AMCL) + DT layer; 2D Pose
   Estimate workflow; gross arrival check disabled (odom-frame).
@@ -67,13 +123,47 @@ pure libs, integration-tested in `sim_only` before it ever goes to the lab. Task
   Estimate after restarts. **← target state for Week-8 review.**
 
 ## Phase 6 — Scenario testing, hardening, demo  (home + Lab)
-- **T6.1** Scenarios: sensor noise, dynamic obstacle (person walks in), multi-bloom, battery sag.
-  Fix desync/latency issues; record metrics.
+- **T6.1** Scenarios: sensor noise, **dynamic obstacle**, multi-bloom, battery sag. Fix desync/latency
+  issues; record metrics. **Make the dynamic obstacle reproducible in `sim_only`** (don't improvise it
+  in the lab): either a scripted moving model added to `algae_arena.world`, or a second teleoped box
+  entity — so the Nav2 reroute (pillar ③) is demonstrable at home and recorded.
+- **T6.1b (OPTIONAL stretch — context-aware DT)** Following the course **"DT Example With Only
+  Gazebo.pdf"** (Weather DT) / `tb3_weather_dt`: a `context_adapter` node pulls an online source
+  (e.g. Open-Meteo weather, no API key) and adjusts behaviour in BOTH worlds — e.g. bad weather →
+  reduce `max_linear_mps` + increase `stop_distance_m` ("cautious spray mode"), shown on a GUI
+  banner. Fail-safe: keep last value, then revert to conservative defaults. Only if Phase 1–5 are
+  solid. **Constraint: HOME / `sim_only` only — never on lab hardware** (the lab network may block
+  outbound calls and an HTTP lib isn't a stock package; per RULES §A-2/§A-3 don't add network deps on
+  the lab laptop). This is the FIRST thing cut if a lab session is lost.
 - **T6.2** `docs/demo_script.md`: the algae-cleaning story, one clean run, **backup plan** (sim-only
   fallback if the robot/Wi-Fi misbehaves).
-- **T6.3** Week-9 video: clean run + every RUBRIC_MAP evidence clip.
+- **T6.3** Week-9 video: clean run + every RUBRIC_MAP evidence clip. **Pre-record the full `sim_only`
+  run at home as the guaranteed baseline video BEFORE the hardware phase**, so a submittable video
+  exists even if late lab sessions fail; swap in `both`/real footage if it's clean.
 
 ---
+
+## Lab-session schedule (7 sessions, Weeks 2–9) — phase ↔ session, entry criteria
+Phases 0–4 are **home/sim_only**; the lab is only needed from Phase 5. Each session: 2–3 members,
+roles assigned, a written 30–60 min test plan, code committed + on USB. **Entry criterion** = what
+must already work at home before the session is worth spending.
+
+| Wk | Session | Lab objective (TESTING) | Entry criterion (built at home) |
+|---|---|---|---|
+| 2 | 1 | Familiarisation; SETUP §3 connect; stock teleop → real moves; `ros2 topic hz /scan` | Phase 1 (teleop→sim works); SETUP done by all (T0.5) |
+| 3 | 2 | Real 25 cm safety stop on `/scan`; confirm `/cmd_vel` TwistStamped on real | Phase 2 (mediator fan-out + safety gate in sim) |
+| 4 | 3 | **Week-4 technical review** evidence: bidirectional + sim + sync number + GUI; light real check | Phases 1–4 complete in `sim_only` |
+| 5 | 4 | AMCL 2D-Pose-Estimate; `real_only` one-bloom navigate + spray; inflation tune | Phase 5 `real_only` built + `both` validated in sim (T5.1b) |
+| 6 | 5 | `both` mode: real leads, sim mirrors 1:1; sync metrics + `/dt/alerts` on hardware | Phase 5 `both` working at home with `fake_robot` |
+| 7 | 6 | **Contingency / hardening** — re-run anything that flaked; dynamic-obstacle + E-STOP on real | Phase 6 scenarios pass in sim |
+| 8 | 7a | **Week-8 technical review** evidence: full twin, all 3 interactions, CSV + alerts, E-STOP | everything above green |
+| 9 | 7b | **Week-9 video** — one clean run (sim_only baseline already recorded as backup) | T6.3 baseline video exists |
+
+**Slack & cut-order (no buffer = high risk with a "High-likelihood" robot-unavailability):** Session 6
+(Wk 7) is a deliberate **contingency slot** with no new objectives. If a session is lost, cut in this
+order: (1) T6.1b online-source stretch, (2) `real_only` polish (keep `both`), (3) extra scenarios —
+**never** cut the sync metrics/alerts (pillar ②) or the dual-LiDAR stop (pillar ③). The `sim_only`
+demo is always a valid fallback for any review or the video. Take **Option A** (full participation).
 
 ## Test plan (what "tested" means)
 - **Unit (pure libs, ≥80%):** geometry, safety (incl. fail-safe + dual-scan), blooms (immutability,

@@ -20,8 +20,11 @@ Place this repo's package at the workspace path the course uses:
 ```
 ~/turtlebot3_ws/src/algae_dt        # (= this repo's ros2_ws/src/algae_dt)
 ```
-Start the course container — note **`--net=host`** (shares the laptop's network stack so ROS 2 DDS
-discovery reaches the robot directly) and the X11 mounts (so Gazebo/RViz/the PyQt5 GUI render via WSLg):
+Start the course container — `--net=host` shares the network namespace (needed for ROS 2 DDS) and
+the X11 mounts let Gazebo/RViz/the PyQt5 GUI render via WSLg. **Note:** at home there is no robot —
+home is `sim_only`. Real-robot connectivity is validated on the **lab laptop** (§3), where the stack
+and the robot share `AP2IRR10` + `ROS_DOMAIN_ID`. (On Docker-Desktop/WSL2, `--net=host` joins the WSL
+VM's network, not the Windows LAN; that's irrelevant at home and a non-issue on the native lab laptop.)
 ```bash
 docker run --rm -it --name turtlebot3_container --net=host -e DISPLAY=$DISPLAY \
   -v /tmp/.X11-unix:/tmp/.X11-unix -v $HOME/turtlebot3_ws:/ws \
@@ -43,6 +46,20 @@ Attach more terminals to the *same* container with: `docker exec -it turtlebot3_
 
 **Gazebo hygiene (course GazeboTutorial):** if a sim wedges, `pkill -9 -f "gz sim"` before relaunch.
 
+### 1b. Alternative: VirtualBox VM (slower; only if WSL+Docker is unavailable)
+Per "VirtualBox+VM Installation.pdf" + "Running the VM.pdf": import the provided Ubuntu VM, then the
+workspace lives natively at `~/turtlebot3_ws/src/algae_dt` (no `docker run`; use the native build
+commands from §2). **Mac users:** "MAC OS users.pdf" — VM only on Intel Macs; less-tested. The team
+is on Windows → use WSL+Docker (§1). The VM table from the course: WSL+Docker is faster, handles many
+nodes, stable in long sessions — "strongly recommended for 2IRR10".
+
+### 1c. Asset provenance (so the package is self-contained)
+- `worlds/algae_arena.world` = the course **`new_world.world`** (from `Simulation Files.zip`) — the
+  digital model of the lab arena. Edit object sizes via the `<collision>`/`<visual>` `<size>` pairs
+  (GazeboTutorial / "Changing Robot Inflation.pdf").
+- `maps/map.{pgm,yaml}` = the course **`mapFiles.zip`** base map (res 0.05, origin [-2.051,-4.194]).
+  You may set the robot start in `map.yaml` or via the Gazebo Tutorial to match the physical start.
+
 ---
 
 ## 2. LAB — the HP Z-Book (native ROS 2, TESTING ONLY)
@@ -52,8 +69,11 @@ sections use `~/turtlebot3_ws/src` with plain `colcon`/`ros2`, no `docker run`).
 **First thing, every session — verify the environment (10 s, settles the old "no turtlebot3" doubt):**
 ```bash
 ros2 pkg list | grep turtlebot3        # expect turtlebot3_gazebo, _bringup, _navigation2, _teleop
+ros2 pkg list | grep nav2_simple_commander   # mission_runner's BasicNavigator import depends on it
 command -v docker && docker images | grep turtlebot3_ws   # (only matters if native TB3 is missing)
 ```
+If `nav2_simple_commander` is missing (rare), it's the one runtime dep to flag to a TA per the
+no-sudo process (RULES §A-3). Run the same two `ros2 pkg list` checks at home in the container.
 If `ros2 pkg list | grep turtlebot3` shows the packages → run **native**. If not, fall back to the
 `turtlebot3_ws` Docker image (same `docker run --net=host …` as §1). One of the two always works.
 
@@ -110,7 +130,10 @@ a time; if testing at a table, prop the wheels off the surface.
 ---
 
 ## 4. Launch recipes (what runs in each mode)
-`bringup.launch.py` orchestrates the stock packages + our `algae_dt` layer:
+**Every terminal that launches our stack in `real_only`/`both` must first**
+`export ROS_DOMAIN_ID=<ROBOT_NUMBER>` (same as the robot, §3) — else zero topics cross, and on the
+shared `AP2IRR10` an unset/default domain risks cross-team topic bleed. `bringup.launch.py`
+orchestrates the stock packages + our `algae_dt` layer:
 - **`mode:=sim_only`** → `turtlebot3_gazebo` (our `algae_arena.world`) + `turtlebot3_navigation2`
   (Nav2/AMCL, `use_sim_time:=true`) + `twin_mediator` + `sync_supervisor` + `mission_runner` +
   `operator_gui`. No robot needed. **This is the home dev target.**
