@@ -34,8 +34,8 @@ packages, the operator, the real robot, the sim, and any online source are exter
 ```
 
 **Boundary flows (the graded bidirectional contract):**
-- **In:** real `/scan /odom /battery_state`; sim `/sim/scan /sim/odom /sim/pose`; operator clicks;
-  (optional) online source.
+- **In:** real `/scan /odom /battery_state`; sim `/sim/scan /sim/odom` (sim pose derived from
+  `/sim/odom`); operator clicks; (optional) online source.
 - **Out:** `/cmd_vel`(TwistStamped→real), `/sim/cmd_vel`(→sim), `/dt/*` state to the GUI + CSV.
 - **Single chokepoint:** all motion commands pass through `twin_mediator` (fan-in/fan-out + safety).
 

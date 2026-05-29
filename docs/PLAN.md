@@ -97,7 +97,8 @@ downloads — our nodes are exactly pub/sub built on this primitive), ROS 2 topi
 - **T4.1** `lib/pgm.py` ported + TDD (P5/P2 → grayscale). **T4.2** `operator_gui` (PyQt5): map canvas,
   real+sim pose overlay, live `/dt/scan_active`, bloom markers (pending/active/done/grey),
   click-to-place→`/dt/blooms`, Start/Stop/Clear/E-STOP, banners (mode/sync/latency/battery/safety/
-  mission). Subscribes `/dt/*` only; QTimer `spin_once`. Headless test with `QT_QPA_PLATFORM=offscreen`.
+  mission — the **battery banner turns amber below `battery_low_v`, red below `battery_critical_v`**).
+  Subscribes `/dt/*` only; QTimer `spin_once`. Headless test with `QT_QPA_PLATFORM=offscreen`.
 - **Exit:** full `sim_only` demo drivable from the GUI alone. **← Week-4 review bar = Phases 1–4
   complete: bidirectional fan-out + Simulation Setup + a measured sim_only sync number (Phase 3) +
   GUI.** (Phase 3 precedes Phase 4, so finishing Phase 4 guarantees the "basic sync number" the
@@ -148,18 +149,26 @@ Phases 0–4 are **home/sim_only**; the lab is only needed from Phase 5. Each se
 roles assigned, a written 30–60 min test plan, code committed + on USB. **Entry criterion** = what
 must already work at home before the session is worth spending.
 
-| Wk | Session | Lab objective (TESTING) | Entry criterion (built at home) |
-|---|---|---|---|
-| 2 | 1 | Familiarisation; SETUP §3 connect; stock teleop → real moves; `ros2 topic hz /scan` | Phase 1 (teleop→sim works); SETUP done by all (T0.5) |
-| 3 | 2 | Real 25 cm safety stop on `/scan`; confirm `/cmd_vel` TwistStamped on real | Phase 2 (mediator fan-out + safety gate in sim) |
-| 4 | 3 | **Week-4 technical review** evidence: bidirectional + sim + sync number + GUI; light real check | Phases 1–4 complete in `sim_only` |
-| 5 | 4 | AMCL 2D-Pose-Estimate; `real_only` one-bloom navigate + spray; inflation tune | Phase 5 `real_only` built + `both` validated in sim (T5.1b) |
-| 6 | 5 | `both` mode: real leads, sim mirrors 1:1; sync metrics + `/dt/alerts` on hardware | Phase 5 `both` working at home with `fake_robot` |
-| 7 | 6 | **Contingency / hardening** — re-run anything that flaked; dynamic-obstacle + E-STOP on real | Phase 6 scenarios pass in sim |
-| 8 | 7a | **Week-8 technical review** evidence: full twin, all 3 interactions, CSV + alerts, E-STOP | everything above green |
-| 9 | 7b | **Week-9 video** — one clean run (sim_only baseline already recorded as backup) | T6.3 baseline video exists |
+The course grants **7 lab sessions across Weeks 2–9** (8 calendar weeks → one week has no session;
+the Week-4 + Week-8 reviews and the Week-9 video are themselves lab slots). **Confirm the exact
+week→session calendar on Canvas** and pin the contingency slot to whichever week is free.
 
-**Slack & cut-order (no buffer = high risk with a "High-likelihood" robot-unavailability):** Session 6
+| Session | Target week | Lab objective (TESTING) | Entry criterion (home-built FIRST) |
+|---|---|---|---|
+| 1 | Wk 2 | Familiarisation; SETUP §3 connect; stock teleop → real moves; `ros2 topic hz /scan` | Phase 1 (teleop→sim works); SETUP done by all (T0.5) |
+| 2 | Wk 3 | Real 25 cm safety stop on `/scan`; confirm `/cmd_vel` is TwistStamped on real | Phase 2 (mediator fan-out + safety gate in sim) |
+| 3 | Wk 4 *(review)* | **Week-4 technical review** evidence: bidirectional + sim + sync number + GUI; light real check | Phases 1–4 complete in `sim_only` |
+| 4 | Wk 5 | `real_only`: AMCL **2D-Pose-Estimate (first done here, in the lab)** + one-bloom navigate+spray; inflation tune | `real_only` launch graph + AMCL params verified in **sim**; `both` validated at home with `fake_robot` (T5.1b) |
+| 5 | Wk 6 | `both` mode: real leads, sim mirrors 1:1; sync metrics + `/dt/alerts` on hardware | Phase 5 `both` working at home with `fake_robot` |
+| 6 | Wk 7 *(contingency)* | **Buffer/hardening** — re-run anything that flaked; dynamic-obstacle + E-STOP on real | Phase 6 scenarios pass in sim |
+| 7 | Wk 8 *(review)* → Wk 9 video | **Week-8 review** evidence (full twin, all 3 interactions, CSV+alerts, E-STOP); then the **Week-9 video** clean run | everything green; `sim_only` baseline video already recorded (T6.3) |
+
+> Note: `real_only` is hardware-dependent and cannot be fully built at home — only its launch graph +
+> AMCL params are verified in sim; the real AMCL 2D-Pose-Estimate is **first exercised in Session 4**,
+> not pre-built. If the course gives a separate Wk-9 slot, that's the 7th physical session and Wk-8 is
+> the 6th-plus-review — adjust the table to the Canvas calendar.
+
+**Slack & cut-order (no buffer = high risk with "High-likelihood" robot-unavailability):** Session 6
 (Wk 7) is a deliberate **contingency slot** with no new objectives. If a session is lost, cut in this
 order: (1) T6.1b online-source stretch, (2) `real_only` polish (keep `both`), (3) extra scenarios —
 **never** cut the sync metrics/alerts (pillar ②) or the dual-LiDAR stop (pillar ③). The `sim_only`
@@ -179,7 +188,7 @@ demo is always a valid fallback for any review or the video. Take **Option A** (
 | Limited/again-unavailable robot time | High | Everything works in `sim_only`; `sim_only` is a valid demo fallback. Lab only validates real/both. |
 | Lab laptop factory-reset / wiped | Med | Commit to git + OneDrive every session; full-package copy rebuild is one command (SETUP §2). |
 | Wi-Fi/`ROS_DOMAIN_ID` mismatch → no topics | Med | SETUP §3 smoke test first; never change network settings. |
-| Sim `/cmd_vel` type mismatch (no motion) | Med | Verify `ros2 topic type` before wiring fan-out; `enable_stamped_cmd_vel:=true`. |
+| Sim `/cmd_vel` type mismatch (no motion) | Med | Verify `ros2 topic type /sim/cmd_vel` before wiring fan-out; the mediator is the sole TwistStamped producer (RULES §B-1/B-2) — Nav2 `enable_stamped_cmd_vel` stays default-false, NOT enabled. |
 | `both`-mode namespace collision | Med | Topic-collision rule; sim strictly `/sim/*`; sim TF off global `/tf`. |
 | Key member absent in lab | Med | 2–3 rotating members; everyone can build+run from SETUP.md; no single owner. |
 | Battery sag mid-mission → auto-E-STOP | Low | Start > 12 V; RESUME workflow documented; report swelling to TA. |

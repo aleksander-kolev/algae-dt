@@ -42,8 +42,10 @@ def generate_launch_description() -> LaunchDescription:
     mode = LaunchConfiguration('mode')
     use_rviz = LaunchConfiguration('use_rviz')
 
-    # lowercase 'true'/'false' so stock launch arg-eval (which expects lowercase) is happy.
-    use_sim_time = PythonExpression(["'true' if '", mode, "' == 'sim_only' else 'false'"])
+    # Node parameters need a real BOOL (a string "true" won't engage rclpy's use_sim_time).
+    use_sim_time = PythonExpression(["'sim_only' == '", mode, "'"])            # -> Python True/False
+    # Launch-include args expect a lowercase string, so build that separately.
+    use_sim_time_str = PythonExpression(["'true' if '", mode, "' == 'sim_only' else 'false'"])
 
     # --- our DT layer (all modes); params bind via the /** wildcard in twin.yaml ---
     common = [{'use_sim_time': use_sim_time}, params, {'mode': mode}]
@@ -60,6 +62,8 @@ def generate_launch_description() -> LaunchDescription:
     # TODO PLAN T1.1: replace with the verified turtlebot3_gazebo gz bring-up + spawn into
     # worlds/algae_arena.world (model + robot_state_publisher + ros_gz bridge). Arg names confirmed
     # empirically in the container before this is enabled; until then use the multi-terminal fallback.
+    # ALSO T1.1: pass Nav2 a `params_file` with `set_initial_pose: true` + the spawn pose so AMCL
+    # auto-localizes in headless sim_only (no human 2D Pose Estimate) — else goals plan unlocalized.
     # In `both` (PLAN T5.1) push the sim to /sim/* and keep sim TF off the global /tf.
 
     # --- stock Nav2 (+AMCL+map). Remap the controller's cmd_vel onto our pre-safety bus so EVERY
@@ -70,7 +74,7 @@ def generate_launch_description() -> LaunchDescription:
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(
                 _share('turtlebot3_navigation2'), 'launch', 'navigation2.launch.py')),
-            launch_arguments={'use_sim_time': use_sim_time, 'map': map_yaml}.items(),
+            launch_arguments={'use_sim_time': use_sim_time_str, 'map': map_yaml}.items(),
         ),
     ])
 

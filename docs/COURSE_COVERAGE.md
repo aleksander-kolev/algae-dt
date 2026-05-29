@@ -2,7 +2,12 @@
 
 Verification that **all course pages, PDFs, tutorials, downloads, and process requirements** are
 accounted for in the plan + structure. Status key: **USED** (drives a file/deliverable),
-**READ** (required reading / knowledge, no artifact), **OPTIONAL** (stretch/enhancer), **N/A**.
+**READ** (required reading / knowledge, no artifact), **ASSUMED** (depends on Canvas confirmation),
+**OPTIONAL** (stretch/enhancer), **N/A**.
+
+> **Disclaimer:** this list is best-effort from the materials we have, **not** a confirmed-exhaustive
+> Canvas index. The exact **rubric weighting is unverified** — confirm "Final Submission and Rubric"
+> + the Technical Review doc on Canvas before the Week-4 review.
 
 ## Setup & environment pages/PDFs
 | Course artifact | Status | Where in this project |
@@ -12,10 +17,10 @@ accounted for in the plan + structure. Status key: **USED** (drives a file/deliv
 | Setting up your workspace in WSL.pdf | USED | `SETUP.md` §1 (`~/turtlebot3_ws/src/algae_dt`) |
 | VirtualBox+VM Installation.pdf | USED | `SETUP.md` §1b (VM alternative) |
 | Running the VM.pdf | USED | `SETUP.md` §1b (VM alternative) |
-| MAC OS users.pdf | N/A (team on Windows) | `SETUP.md` §1b note (kept for completeness) |
+| MAC OS users.pdf | READ (team on Windows) | `SETUP.md` §1b note (kept for completeness) |
 | Connecting lab laptop to lab robot.pdf | USED | `SETUP.md` §3 (robot connection, verbatim flow) |
 | Transferring files.pdf | USED | `SETUP.md` §2 (full-package copy to lab laptop) |
-| GazeboTutorial.pdf | USED | `BEST_APPROACHES.md` (`pkill -9 -f "gz sim"`, world editing) |
+| GazeboTutorial.pdf | USED | `BEST_APPROACHES.md` (`pkill -9 -f "gz sim"`) + `SETUP.md` §1c (world/`<size>` editing) |
 | Changing Robot Inflation.pdf | USED | `BEST_APPROACHES.md` (runtime inflation, no sudo) |
 | How to create Packages.pdf (Sections 1/2/3) | USED | `SETUP.md` §2 (Section 3 = copy full package) |
 
@@ -32,7 +37,7 @@ accounted for in the plan + structure. Status key: **USED** (drives a file/deliv
 | Digital Twin (concept) | READ | `CLAUDE.md` §1, `RUBRIC_MAP.md` (DT triad) |
 | Mobile Robot and Digital Twin | READ | `CLAUDE.md` §1/§4 |
 | Simulation and Robot Operating System (ROS) | READ | `RULES.md` §C, pub/sub design |
-| Final Submission and Rubric / Submit PoC | USED | `RUBRIC_MAP.md` (cross-check before each review) |
+| Final Submission and Rubric / Submit PoC | ASSUMED | `RUBRIC_MAP.md` (3×4 triad assumed — **verify weighting on Canvas before Wk-4**) |
 | Technical Review document | USED | `RUBRIC_MAP.md` review checkpoints (Week 4 & 8) |
 
 ## Tutorials & provided code (the canonical templates we build on)
