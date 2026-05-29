@@ -4,9 +4,10 @@ Built the course way: **develop at home in `sim_only`; the lab is for testing on
 sessions (Weeks 2–9), **technical reviews Week 4 & Week 8**, **video Week 9**. Everything is TDD on
 pure libs, integration-tested in `sim_only` before it ever goes to the lab. Task IDs `T#`.
 
-> **Rubric caveat:** the 12/12 target assumes the 3×4 DT triad (`docs/RUBRIC_MAP.md`). **Cross-check
-> the exact weighting on the Canvas "Final Submission and Rubric" + Technical Review doc before the
-> Week-4 review** and adjust phase priorities if the weights differ.
+> **Rubric (confirmed official):** "Implementation of PoC" = 3 criteria × 4 = **12** (Bidirectional,
+> Sync, Environmental); aim for the **Redlining (4)** band on each — see `docs/RUBRIC_MAP.md` for the
+> exact triggers. **Option A is mandatory** (Option B caps at 7/12). Submission package + demo script:
+> `docs/SUBMISSION.md`, `docs/DEMO_SCRIPT.md`. Due **Mon 22 Jun 2026 21:00**.
 
 > Migration note: port reusable logic from the old `algae-twin` repo's pure libs
 > (`geometry/safety/blooms/sync/pgm`) — they're ROS-free and already unit-tested — and DROP all the
@@ -138,8 +139,8 @@ downloads — our nodes are exactly pub/sub built on this primitive), ROS 2 topi
   solid. **Constraint: HOME / `sim_only` only — never on lab hardware** (the lab network may block
   outbound calls and an HTTP lib isn't a stock package; per RULES §A-2/§A-3 don't add network deps on
   the lab laptop). This is the FIRST thing cut if a lab session is lost.
-- **T6.2** `docs/demo_script.md`: the algae-cleaning story, one clean run, **backup plan** (sim-only
-  fallback if the robot/Wi-Fi misbehaves).
+- **T6.2** `docs/DEMO_SCRIPT.md` (done): timed 2–3 min script hitting all three Redlining triggers,
+  one clean run, **backup plan** (pre-recorded `sim_only` clip if the robot/Wi-Fi misbehaves).
 - **T6.3** Week-9 video: clean run + every RUBRIC_MAP evidence clip. **Pre-record the full `sim_only`
   run at home as the guaranteed baseline video BEFORE the hardware phase**, so a submittable video
   exists even if late lab sessions fail; swap in `both`/real footage if it's clean.

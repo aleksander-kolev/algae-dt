@@ -33,6 +33,8 @@ Put this repo's `ros2_ws/src/algae_dt` at `~/turtlebot3_ws/src/algae_dt` first. 
 | `docs/SCENARIOS_SIM.md` | `sim_only` run scenarios (dev + fallback demo) — flow + edge cases. |
 | `docs/SCENARIOS_LAB.md` | Lab-laptop + real-robot run scenarios — flow + edge cases. |
 | `docs/CONTEXT_DIAGRAM.md` | System context diagram (boundary + topic flows). |
+| `docs/SUBMISSION.md` | PoC submission package, checklist, due date, Option A (official rubric). |
+| `docs/DEMO_SCRIPT.md` | Timed 2–3 min demo video script mapped to the rubric. |
 
 ## Status
 Scaffold + docs + plan complete. Node logic is built per `docs/PLAN.md` (TDD, tested in `sim_only`

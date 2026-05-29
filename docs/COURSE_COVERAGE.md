@@ -6,8 +6,8 @@ accounted for in the plan + structure. Status key: **USED** (drives a file/deliv
 **OPTIONAL** (stretch/enhancer), **N/A**.
 
 > **Disclaimer:** this list is best-effort from the materials we have, **not** a confirmed-exhaustive
-> Canvas index. The exact **rubric weighting is unverified** — confirm "Final Submission and Rubric"
-> + the Technical Review doc on Canvas before the Week-4 review.
+> Canvas index. The **rubric is now confirmed** (official "Implementation of PoC": 3 criteria × 4 = 12,
+> Option B caps at 7/12) — see `docs/RUBRIC_MAP.md` + `docs/SUBMISSION.md`.
 
 ## Setup & environment pages/PDFs
 | Course artifact | Status | Where in this project |
@@ -37,7 +37,7 @@ accounted for in the plan + structure. Status key: **USED** (drives a file/deliv
 | Digital Twin (concept) | READ | `CLAUDE.md` §1, `RUBRIC_MAP.md` (DT triad) |
 | Mobile Robot and Digital Twin | READ | `CLAUDE.md` §1/§4 |
 | Simulation and Robot Operating System (ROS) | READ | `RULES.md` §C, pub/sub design |
-| Final Submission and Rubric / Submit PoC | ASSUMED | `RUBRIC_MAP.md` (3×4 triad assumed — **verify weighting on Canvas before Wk-4**) |
+| Final Submission and Rubric / Submit PoC | USED (confirmed) | `RUBRIC_MAP.md` (official 3×4=12, Option A/B caps) + `SUBMISSION.md` (zip/credentials/video, due 22 Jun 2026) |
 | Technical Review document | USED | `RUBRIC_MAP.md` review checkpoints (Week 4 & 8) |
 
 ## Tutorials & provided code (the canonical templates we build on)

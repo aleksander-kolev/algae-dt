@@ -123,3 +123,5 @@ lab session (the laptop can be wiped).
 - `docs/RUBRIC_MAP.md` — every deliverable → rubric pillar → evidence artifact → demo step.
 - `docs/SCENARIOS_SIM.md` / `docs/SCENARIOS_LAB.md` — concise run scenarios (flow + edge cases).
 - `docs/CONTEXT_DIAGRAM.md` — system boundary + topic flows.
+- `docs/SUBMISSION.md` + `docs/DEMO_SCRIPT.md` — PoC submission package + 2–3 min demo video script
+  (official rubric: 3×4=12, Redlining targets, Option A; due 22 Jun 2026).

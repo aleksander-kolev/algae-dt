@@ -1,12 +1,17 @@
 # RUBRIC_MAP.md — how we earn 12/12 (deliverable → pillar → evidence → demo)
 
-> **Assumption & how to use this:** the official 2IRR10 rubric lives on Canvas ("Final Submission and
-> Rubric" + the Technical Review document). This maps our work onto the **Digital-Twin triad the
-> course grades — ① Bidirectional communication, ② State synchronization, ③ Environmental
-> interaction — scored 3 × 4 = 12**, AND onto **every row of the course "Lab Preparation" step
-> table** so that whatever the exact weighting, each named deliverable has concrete evidence.
-> Cross-check against the Canvas rubric before each review; adjust here if weights differ.
-> Take **Option A** (full lab participation) for full rubric potential.
+> **OFFICIAL rubric (confirmed — "Implementation of PoC", 3 criteria × 4 = 12):** ① Bidirectional
+> Communication, ② Synchronization of States, ③ Environmental & Object Interaction. The assignment is
+> 30 pts total — the extra points come from the video/presentation (per Canvas). **Take Option A** —
+> **Option B caps each criterion** (Bidirectional ≤3, Sync ≤2, Environmental ≤2 → max 7/12).
+> Full-mark band per criterion is **"Redlining" (4)**; our deliverables below target exactly its
+> wording. We also cover every "Lab Preparation" step-table row.
+>
+> **Redlining triggers (must all be true in the demo):** (①) robust 2-way pub/sub, consistent rate,
+> no dropouts, ≥1 topic each direction **+ an internal status topic**; (②) near-real-time mirroring of
+> **multiple** states incl. **≥1 internal state (battery/health/fault/mode) that affects behavior or
+> display**; (③) obstacle/object interaction **mirrored across entities** with **≥1 environment change
+> introduced live** during the demo.
 
 ---
 
@@ -25,7 +30,8 @@ a command typed in teleop/GUI moves BOTH robots; an obstacle in either world is 
 publishes the real robot's bare `/scan /odom /cmd_vel /battery_state`, so the real→digital and
 digital→real arrows are demonstrable at home without a robot.
 **Demo step:** drive via GUI → both robots move; show the topic graph fanning out.
-**Full marks bar:** ≥ 1 topic each direction, live, through a single mediator (not direct wiring).
+**Redlining (4):** robust 2-way pub/sub at a consistent rate, no dropouts; ≥1 topic each direction
+(e.g. `/scan`→twin, `/cmd_vel`→robot) **plus an internal status topic** (`/dt/sync_ok`/`/dt/mode`).
 
 ### ② State synchronization & tolerances — 4 pts  (course row: "Real-Time Synchronization and Tolerances")
 **Deliverable:** `sync_supervisor` — the part most teams skip; we make it first-class.
@@ -42,7 +48,9 @@ digital→real arrows are demonstrable at home without a robot.
 **Evidence:** the generated `sync_metrics_<run>.csv`; a screenshot/recording of the GUI sync banner
 going amber when you nudge the sim out of tolerance; `ros2 topic echo /dt/alerts` firing on cue.
 **Demo step:** show pose locked in tolerance, then induce a discrepancy → alert + log appear.
-**Full marks bar:** sync achieved + latency/error measured & reported + thresholds documented + alerts.
+**Redlining (4):** near-real-time mirroring of **multiple** states incl. **≥1 internal state that
+affects behavior/display** — battery≤critical → **auto-E-STOP** (behavior) + red banner, `/dt/mode`,
+plus measured error/latency + documented tolerances + alerts; mirror stays consistent throughout.
 
 ### ③ Environmental interaction — 4 pts  (course rows: "Obstacle Detection & Avoidance" + "Object Manipulation/Transport")
 **Deliverable:** three distinct interactions (bar is "pick one" — we do three):
@@ -56,8 +64,9 @@ going amber when you nudge the sim out of tolerance; `ros2 topic echo /dt/alerts
 **Evidence:** put a box in front in either world → both stop (and the **measured `stop_skew_ms`** real
 vs sim is logged — synchrony is quantified, not just claimed); add a dynamic obstacle (scripted/teleoped
 in sim) → Nav2 reroutes; bloom turns green only after a full spray. **Demo step:** all three on one run.
-**Full marks bar:** at least one robust interaction synchronous across both robots (skew within
-`stop_skew_ms`); we show three.
+**Redlining (4):** obstacle/object interaction functional and **mirrored across both entities**
+near-real-time, with **≥1 environment change introduced LIVE during the demo** (drop a box) →
+consistent mirrored stop (skew within `stop_skew_ms`); we show three interactions.
 
 ### Safety headline (cross-cutting, strengthens all three)
 Latched `/dt/estop` halts both robots + cancels the Nav2 goal + latches until RESUME; auto-E-STOP on
