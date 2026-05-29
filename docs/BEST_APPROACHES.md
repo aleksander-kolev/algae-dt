@@ -41,6 +41,23 @@ packages**. So:
   Aborted/short spray → bloom stays pending. Nav failure → grey/skipped. Prevents a half-treated
   bloom being wrongly skipped next start by `nearest_untreated`.
 
+## Library-doc verification (Context7 — Nav2 & TurtleBot3 official docs)
+Confirmed before implementation:
+- **cmd_vel:** Nav2 `enable_stamped_cmd_vel` defaults **false on Jazzy** (TwistStamped became default
+  in Kilted); real `turtlebot3_node` runs it **true** (burger.yaml) so the robot + teleop use
+  `TwistStamped`. → bus is `TwistStamped`; set the flag true on Nav2 via `params_file`. (See §cmd_vel.)
+- **BasicNavigator** (`nav2_simple_commander`): `goToPose(pose, behavior_tree='')`, `isTaskComplete()`,
+  `getFeedback().navigation_time`, `getResult()`→`TaskResult.{SUCCEEDED,CANCELED,FAILED}`,
+  `cancelTask()`, `waitUntilNav2Active()`, `setInitialPose(PoseStamped)`, constructor takes `namespace`
+  (and `node_name`). All used by our `mission_runner` — verified real.
+- **sim_only AMCL seed:** use `nav.setInitialPose(spawn_pose)` from the commander (cleanest) OR
+  `set_initial_pose` in the Nav2 `params_file`.
+- **`turtlebot3_navigation2 navigation2.launch.py`** accepts `map`, `use_sim_time`, `params_file` —
+  our launch/plan use exactly these.
+- Nav2 has a built-in **`spin(spin_dist, time_allowance)`** behavior; we still spray via a direct
+  timed publish to `/dt/cmd_vel_raw` (gives us the 5 s duration + abort + fan-out-to-both control),
+  but `spin()` is a viable alternative if we want Nav2 to own the rotation.
+
 ## Lessons & gotchas (APPEND as you learn)
 - **`tf2_echo` lies under sim time.** The CLI uses wall clock; verify TF via `ros2 topic echo /tf |
   grep frame_id` or a node with `use_sim_time:=true`.
@@ -49,10 +66,14 @@ packages**. So:
   mission_runner `Node(...)` in the launch** — a `launch_ros` `name=` injects a process-wide
   `__node:=` remap that renames EVERY node the process spawns (incl. BasicNavigator's helper) →
   duplicate `/mission_runner`, no helper. Let the node self-name; params bind via the `/**` wildcard.
-- **ros_gz `/cmd_vel` is `gz.msgs.Twist`.** When you bridge the sim's cmd_vel, publish the type the
-  bridge expects. With turtlebot3_gazebo on Jazzy the ROS-side `/cmd_vel` is TwistStamped — **verify
-  the sim cmd_vel type empirically** (`ros2 topic type /sim/cmd_vel`) before wiring the fan-out; this
-  is the #1 "sim activates but doesn't move" trap. (Old lesson: enable_stamped_cmd_vel default FALSE.)
+- **cmd_vel is `TwistStamped` on Jazzy (verified against Nav2 + TurtleBot3 docs).** Real
+  `turtlebot3_node` runs `enable_stamped_cmd_vel:true` (subscribes TwistStamped) and `turtlebot3_teleop`
+  publishes TwistStamped → the whole `/dt/cmd_vel_raw` bus is TwistStamped. **Nav2 on Jazzy defaults to
+  plain `Twist`** (TwistStamped became default only in Kilted), so you MUST set
+  `enable_stamped_cmd_vel:true` on Nav2's controller/behavior/velocity_smoother via a `params_file`,
+  else autonomous commands never reach the bus and **the robot activates but never moves** (the #1
+  silent trap). Still **verify `ros2 topic type /sim/cmd_vel`** empirically before wiring the sim
+  fan-out (gz bridge side may differ). (A plain-`Twist` bus is WRONG here — it breaks stock teleop.)
 - **Namespacing turtlebot3_gazebo to `/sim/*` for `both` mode.** Launch the sim under a `sim`
   namespace (or remap its bridge topics) so it never collides with the real robot's bare topics, and
   route sim TF to `/sim/tf`. This is the main integration task for `both` — budget time for it.

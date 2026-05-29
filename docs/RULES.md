@@ -29,17 +29,20 @@ runtime failure), **C) coding & process conventions**.
    confirms the robot was shut down properly (`sudo shutdown now` on the Pi) before the power switch.
 
 ## B. Technical invariants (verified — each one, broken, fails silently)
-1. **cmd_vel type contract — `/dt/cmd_vel_raw` is plain `Twist`; the real `/cmd_vel` is TwistStamped.**
-   On Jazzy the real bringup expects `TwistStamped` on `/cmd_vel`. We keep the pre-safety bus
-   `/dt/cmd_vel_raw` as plain **`Twist`** (what teleop, the GUI, and Nav2's controller all publish by
-   default) and the **mediator is the ONLY thing that stamps** → publishes `TwistStamped` to the real
-   `/cmd_vel`. A ROS topic has ONE type, so never publish both `Twist` and `TwistStamped` to
-   `/dt/cmd_vel_raw`. (`/sim/cmd_vel` type is verified at runtime: `ros2 topic type /sim/cmd_vel`.)
-2. **Do NOT rely on Nav2's `enable_stamped_cmd_vel`.** Because the mediator does the stamping, Nav2
-   stays default (plain `Twist`) — this removes the old "activates-but-never-moves" trap entirely. We
-   **remap Nav2's controller `cmd_vel` → `/dt/cmd_vel_raw` in the launch** (via `SetRemap` around the
+1. **cmd_vel type contract (Jazzy, doc-confirmed) — the whole bus is `TwistStamped`.** On Jazzy the
+   real `turtlebot3_node` runs `enable_stamped_cmd_vel: true` (burger.yaml) → it **subscribes
+   `TwistStamped`** on `/cmd_vel`, and `turtlebot3_teleop` **publishes `TwistStamped`**. So
+   `/dt/cmd_vel_raw` is **`TwistStamped`** (one type — never mix `Twist`/`TwistStamped` on it). The
+   mediator forwards `TwistStamped`→ real `/cmd_vel`, and the **runtime-verified** type → `/sim/cmd_vel`
+   (`ros2 topic type /sim/cmd_vel`; on Jazzy turtlebot3_gazebo this is typically `TwistStamped` too).
+2. **Set `enable_stamped_cmd_vel: true` on Nav2** (controller_server / behavior_server /
+   velocity_smoother) — Nav2 on Jazzy defaults to plain `Twist` (per Nav2 migration/Jazzy docs), so
+   without this its commands won't match the `TwistStamped` bus and **the robot activates but never
+   moves** (silent). Inject it via a **`params_file`** passed to `navigation2.launch.py` (the
+   `/**`-wildcard in `twin.yaml` does NOT reach Nav2 — Nav2 loads its own params). Also **remap Nav2's
+   controller `cmd_vel` → `/dt/cmd_vel_raw` in the launch** (via `SetRemap` around the
    `turtlebot3_navigation2` include — NOT on `mission_runner`, which is a BasicNavigator action client
-   and publishes no `cmd_vel`). The mediator is thus the single safety chokepoint for autonomy too.
+   and publishes no `cmd_vel`), so the mediator stays the single safety chokepoint for autonomy.
 3. **Topic-collision rule (course-stated):** real and sim must NEVER publish the same topic name.
    Real = bare (`/scan /odom /cmd_vel /tf`), sim = `/sim/*`, sim TF off the global `/tf` in `both`.
 4. **`use_sim_time:=true` ONLY in `sim_only`.** In `real_only`/`both` the real robot leads on wall

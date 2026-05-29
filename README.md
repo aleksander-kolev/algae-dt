@@ -30,6 +30,9 @@ Put this repo's `ros2_ws/src/algae_dt` at `~/turtlebot3_ws/src/algae_dt` first. 
 | `docs/BEST_APPROACHES.md` | Patterns, lessons & gotchas. |
 | `docs/PLAN.md` | Phased 12/12 implementation plan (7 lab sessions, Week-4/8 reviews, Week-9 video). |
 | `docs/RUBRIC_MAP.md` | Deliverable → rubric pillar → evidence → demo step. |
+| `docs/SCENARIOS_SIM.md` | `sim_only` run scenarios (dev + fallback demo) — flow + edge cases. |
+| `docs/SCENARIOS_LAB.md` | Lab-laptop + real-robot run scenarios — flow + edge cases. |
+| `docs/CONTEXT_DIAGRAM.md` | System context diagram (boundary + topic flows). |
 
 ## Status
 Scaffold + docs + plan complete. Node logic is built per `docs/PLAN.md` (TDD, tested in `sim_only`

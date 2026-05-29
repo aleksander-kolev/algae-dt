@@ -59,10 +59,10 @@ Authoritative docs: design + rubric `docs/RUBRIC_MAP.md`; plan `docs/PLAN.md`; e
 ## 4. Architecture — `algae_dt` custom package (thin DT layer on the stock stack)
 Nodes:
 - **`twin_mediator`** — the course's **DT Integration Node (fan-in / fan-out)**. Subscribes the
-  pre-safety command bus `/dt/cmd_vel_raw` (**plain `Twist`** — see the type contract below) + both
-  scans; applies the **25 cm dual-LiDAR safety gate**; fans the safe command out to **`/cmd_vel`
-  (TwistStamped, real — the mediator stamps it)** AND **`/sim/cmd_vel` (sim, type verified at
-  runtime)**. Mirrors `/odom`→`/dt/real_pose`, sim pose (`/sim/odom`)→`/dt/sim_pose`,
+  pre-safety command bus `/dt/cmd_vel_raw` (**`TwistStamped`** — Jazzy norm; see the type contract
+  below) + both scans; applies the **25 cm dual-LiDAR safety gate**; fans the safe command out to
+  **`/cmd_vel` (TwistStamped, real)** AND **`/sim/cmd_vel` (sim, type verified at runtime)**.
+  Mirrors `/odom`→`/dt/real_pose`, sim pose (`/sim/odom`)→`/dt/sim_pose`,
   `/battery_state`→`/dt/health` (synthetic battery in `sim_only`). Owns/publishes the latched
   **`/dt/estop`**, **`/dt/mode`** (latched), **`/dt/safety`** (Bool). Republishes the ACTIVE robot's
   scan/odom to `/dt/scan_active` + `/dt/odom_active`.
@@ -84,12 +84,14 @@ Nodes:
 - `both`: real **leads**, sim **mirrors 1:1** (mediator fan-out). Sim namespaced to `/sim/*`.
 
 ### Topic contract (course Mini-Project-3 contract, extended)
-- **cmd_vel TYPE CONTRACT:** `/dt/cmd_vel_raw` carries plain **`Twist`** (teleop, GUI, and Nav2
-  controller all publish plain `Twist`; Nav2's `enable_stamped_cmd_vel` stays default-false). The
-  mediator is the ONLY producer of `TwistStamped`, which it stamps onto the real `/cmd_vel`. This
-  removes the old "activates-but-never-moves" trap without touching Nav2 params.
-- Command bus: `/dt/cmd_vel_raw`(Twist) (teleop OR GUI OR Nav2 controller cmd_vel **remapped in the
-  launch**) → mediator gates → **`/cmd_vel`(TwistStamped, real) + `/sim/cmd_vel`(type verified)**.
+- **cmd_vel TYPE CONTRACT (Jazzy, doc-confirmed):** the real `turtlebot3_node` subscribes
+  **`TwistStamped`** on `/cmd_vel` (`enable_stamped_cmd_vel: true` in burger.yaml) and
+  `turtlebot3_teleop` publishes `TwistStamped`. So the bus `/dt/cmd_vel_raw` is **`TwistStamped`**.
+  Nav2 on Jazzy defaults to plain `Twist`, so we set **`enable_stamped_cmd_vel: true` on Nav2's
+  controller/behavior/velocity_smoother via a `params_file`** so it too publishes `TwistStamped`.
+  (This matches the course Mini-Project-3 bus; a plain-`Twist` bus breaks stock teleop on Jazzy.)
+- Command bus: `/dt/cmd_vel_raw`(TwistStamped) (teleop OR GUI OR Nav2 controller cmd_vel **remapped in
+  the launch**) → mediator gates → **`/cmd_vel`(TwistStamped, real) + `/sim/cmd_vel`(type verified)**.
 - Real (bare): `/scan /odom /cmd_vel(TwistStamped) /battery_state /tf`.
 - Sim (`/sim/*`): `/sim/scan /sim/odom /sim/cmd_vel /sim/tf /clock` (sim pose taken from `/sim/odom`).
 - Digital (`/dt/*`): `/dt/cmd_vel_raw /dt/real_pose /dt/sim_pose /dt/scan_active /dt/odom_active
@@ -119,3 +121,5 @@ lab session (the laptop can be wiped).
 - `docs/BEST_APPROACHES.md` — patterns, lessons & gotchas (ported + reframed for the stock stack).
 - `docs/PLAN.md` — phased 12/12 plan mapped to the 7 lab sessions + Week-4/8 reviews + Week-9 video.
 - `docs/RUBRIC_MAP.md` — every deliverable → rubric pillar → evidence artifact → demo step.
+- `docs/SCENARIOS_SIM.md` / `docs/SCENARIOS_LAB.md` — concise run scenarios (flow + edge cases).
+- `docs/CONTEXT_DIAGRAM.md` — system boundary + topic flows.

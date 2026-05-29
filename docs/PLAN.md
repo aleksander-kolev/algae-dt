@@ -67,8 +67,10 @@ downloads — our nodes are exactly pub/sub built on this primitive), ROS 2 topi
   `/dt/cmd_vel_raw`; `/dt/markers`, `/dt/mission_state`; honest accounting (no-spray-on-failure,
   aborted→pending). **The Nav2 controller `cmd_vel`→`/dt/cmd_vel_raw` remap is done in the LAUNCH
   (SetRemap around the `turtlebot3_navigation2` include), NOT on `mission_runner`** (which publishes
-  no cmd_vel). Keep Nav2 default (plain `Twist`) — the mediator stamps for the real robot, so
-  `enable_stamped_cmd_vel` is NOT needed (RULES §B-1/B-2).
+  no cmd_vel). **Pass Nav2 a `params_file` setting `enable_stamped_cmd_vel: true`** on
+  controller/behavior/velocity_smoother (Nav2 Jazzy defaults to plain `Twist`; the bus is
+  `TwistStamped`) — build it from turtlebot3's bundled params via `nav2_common` RewrittenYaml so the
+  tuned params are kept (RULES §B-1/B-2).
 - **T2.3** `twin_mediator` v2: full fan-out `/dt/cmd_vel_raw`→`/cmd_vel`+`/sim/cmd_vel`; mirrors
   `/odom`→`/dt/real_pose`, sim pose→`/dt/sim_pose`, battery→`/dt/health`; `/dt/scan_active`,
   `/dt/odom_active`; latched `/dt/estop` + auto-E-STOP on critical battery.
@@ -188,7 +190,7 @@ demo is always a valid fallback for any review or the video. Take **Option A** (
 | Limited/again-unavailable robot time | High | Everything works in `sim_only`; `sim_only` is a valid demo fallback. Lab only validates real/both. |
 | Lab laptop factory-reset / wiped | Med | Commit to git + OneDrive every session; full-package copy rebuild is one command (SETUP §2). |
 | Wi-Fi/`ROS_DOMAIN_ID` mismatch → no topics | Med | SETUP §3 smoke test first; never change network settings. |
-| Sim `/cmd_vel` type mismatch (no motion) | Med | Verify `ros2 topic type /sim/cmd_vel` before wiring fan-out; the mediator is the sole TwistStamped producer (RULES §B-1/B-2) — Nav2 `enable_stamped_cmd_vel` stays default-false, NOT enabled. |
+| cmd_vel type mismatch (no motion) | Med | Bus is `TwistStamped` (Jazzy norm). Set `enable_stamped_cmd_vel:true` on Nav2 via params_file (Nav2 Jazzy defaults to Twist); verify `ros2 topic type /sim/cmd_vel` before wiring the sim fan-out (RULES §B-1/B-2). |
 | `both`-mode namespace collision | Med | Topic-collision rule; sim strictly `/sim/*`; sim TF off global `/tf`. |
 | Key member absent in lab | Med | 2–3 rotating members; everyone can build+run from SETUP.md; no single owner. |
 | Battery sag mid-mission → auto-E-STOP | Low | Start > 12 V; RESUME workflow documented; report swelling to TA. |

@@ -7,11 +7,13 @@
     # --- mode (overridden by the launch arg) ---
     mode: sim_only                 # sim_only | real_only | both
 
-    # --- command bus TYPE CONTRACT ---
-    # /dt/cmd_vel_raw is plain geometry_msgs/Twist (teleop, GUI, Nav2 controller all default to Twist).
-    # The mediator is the ONLY producer of TwistStamped -> real /cmd_vel. So Nav2's
-    # enable_stamped_cmd_vel is left default (false); we just remap the controller's cmd_vel onto
-    # /dt/cmd_vel_raw in the launch. (RULES §B-1/B-2.)
+    # --- command bus TYPE CONTRACT (Jazzy, doc-confirmed) ---
+    # /dt/cmd_vel_raw is geometry_msgs/TwistStamped: on Jazzy the real turtlebot3_node subscribes
+    # TwistStamped (enable_stamped_cmd_vel:true in burger.yaml) and turtlebot3_teleop publishes
+    # TwistStamped. Nav2 on Jazzy defaults to plain Twist, so a Nav2 params_file sets
+    # enable_stamped_cmd_vel:true on controller/behavior/velocity_smoother AND we remap its cmd_vel
+    # onto /dt/cmd_vel_raw in the launch. Mediator forwards TwistStamped->real /cmd_vel + verified
+    # type ->/sim/cmd_vel. (RULES §B-1/B-2; matches the course Lidar-DT Mini-Project-3 bus.)
 
     # --- safety / motion (Rubric ③, course 25 cm dual-LiDAR stop) ---
     stop_distance_m: 0.25          # course Lidar-DT spec. Rationale: >LDS-02 min (0.12) + footprint

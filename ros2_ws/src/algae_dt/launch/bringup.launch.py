@@ -6,10 +6,11 @@ in docs/BEST_APPROACHES.md. Items still being wired are marked TODO with PLAN ta
 
     ros2 launch algae_dt bringup.launch.py mode:=sim_only
 
-cmd_vel TYPE CONTRACT (see RULES §B): /dt/cmd_vel_raw carries plain geometry_msgs/Twist (teleop, GUI,
-and Nav2 controller all publish plain Twist by default). The mediator is the ONLY producer of
-TwistStamped, which it publishes to the real robot's /cmd_vel. So we do NOT need Nav2's
-enable_stamped_cmd_vel — we just remap Nav2's controller cmd_vel onto /dt/cmd_vel_raw (below).
+cmd_vel TYPE CONTRACT (see RULES §B, Jazzy doc-confirmed): /dt/cmd_vel_raw is geometry_msgs/
+TwistStamped (real turtlebot3_node + turtlebot3_teleop use TwistStamped on Jazzy). Nav2 on Jazzy
+defaults to plain Twist, so we (a) set enable_stamped_cmd_vel:true on Nav2 via a params_file and
+(b) remap Nav2's controller cmd_vel onto /dt/cmd_vel_raw (below). The mediator forwards TwistStamped
+to the real /cmd_vel and the runtime-verified type to /sim/cmd_vel.
 """
 import os
 
@@ -67,8 +68,14 @@ def generate_launch_description() -> LaunchDescription:
     # In `both` (PLAN T5.1) push the sim to /sim/* and keep sim TF off the global /tf.
 
     # --- stock Nav2 (+AMCL+map). Remap the controller's cmd_vel onto our pre-safety bus so EVERY
-    #     autonomous command passes through the mediator's safety gate (fixes the single-chokepoint).
-    #     SetRemap inside the group rewrites /cmd_vel for the included Nav2 nodes. PLAN T1.1/T2.2. ---
+    #     autonomous command passes through the mediator's safety gate (single-chokepoint).
+    #     SetRemap inside the group rewrites /cmd_vel for the included Nav2 nodes.
+    # TODO PLAN T2.2: pass params_file=<turtlebot3 Nav2 params + enable_stamped_cmd_vel:true on
+    #     controller_server/behavior_server/velocity_smoother + (sim_only) set_initial_pose to the
+    #     spawn pose>. Build it from turtlebot3_navigation2's bundled params via nav2_common
+    #     RewrittenYaml (param_rewrites) so the tuned params are kept — see docs/RULES §B-2. Until
+    #     then Nav2 publishes plain Twist (Jazzy default) and autonomous motion won't reach the
+    #     TwistStamped bus; teleop/GUI (TwistStamped) still work. ---
     nav2 = GroupAction([
         SetRemap('/cmd_vel', '/dt/cmd_vel_raw'),
         IncludeLaunchDescription(
