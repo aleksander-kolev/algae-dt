@@ -1,6 +1,7 @@
 # CLAUDE.md — algae-dt (course-faithful TurtleBot3 Digital Twin)
 
-Persistent guidance for any session on this project. **Read this first.** This project is a
+Persistent guidance for any session on this project. **Resuming/continuing implementation? Read
+[`HANDOFF.md`](HANDOFF.md) first**, then this. This project is a
 **clean restart** of the old `algae-twin` repo, rebuilt to follow the **TU/e 2IRR10 course's
 recommended method exactly**: WSL+Docker (or the native lab laptop), the **default turtlebot3
 packages**, and **one custom ROS 2 package** for our digital-twin logic. Append to
@@ -116,6 +117,8 @@ new dependency is in the `turtlebot3_ws` image / lab laptop before relying on it
 lab session (the laptop can be wiped).
 
 ## 7. Pointers
+- `HANDOFF.md` — **resuming AI starts here** (state, order, invariants, do-not-regress, first task).
+- `docs/DECISIONS.md` — why the project is the way it is (settled decisions + forensics).
 - `docs/SETUP.md` — exact WSL+Docker, lab-laptop, and robot-connection commands.
 - `docs/RULES.md` — hard constraints (course golden rules + technical invariants + coding style).
 - `docs/BEST_APPROACHES.md` — patterns, lessons & gotchas (ported + reframed for the stock stack).

@@ -15,6 +15,10 @@
 
 ---
 
+**100% = Redlining (4) on all three → 12/12 on the implementation rubric, under Option A, + a
+Redlining-quality 2–3 min video matching the presentation** (the assignment's remaining points to 30
+are video/presentation — confirm the split on Canvas; `docs/SUBMISSION.md`).
+
 ## The 12 points
 
 ### ① Bidirectional communication — 4 pts  (course row: "DT Integration Node (fan-in/fan-out)")

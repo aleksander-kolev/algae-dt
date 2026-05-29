@@ -24,7 +24,9 @@ Put this repo's `ros2_ws/src/algae_dt` at `~/turtlebot3_ws/src/algae_dt` first. 
 ## Docs
 | File | What |
 |---|---|
-| `CLAUDE.md` | Read first — what this is + the course method + architecture. |
+| `HANDOFF.md` | **Resuming AI starts here** — state, implementation order, invariants, first task. |
+| `CLAUDE.md` | What this is + the course method + architecture. |
+| `docs/DECISIONS.md` | Why — settled decisions + forensics (preserve this context). |
 | `docs/SETUP.md` | WSL+Docker, lab laptop, robot connection, file transfer — exact commands. |
 | `docs/RULES.md` | Hard constraints (course golden rules + technical invariants + style). |
 | `docs/BEST_APPROACHES.md` | Patterns, lessons & gotchas. |
