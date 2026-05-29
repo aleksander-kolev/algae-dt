@@ -1,0 +1,56 @@
+# Shared parameters for all algae_dt nodes (loaded by bringup.launch.py via the /** wildcard).
+# Tunables live here — nodes NEVER hardcode them (RULES.md §C). Values trace to lab/course specs:
+# 0.25 m stop (course Lidar-DT), 0.22 m/s Burger max, LDS-02 ranges, 5 s spray.
+/**:
+  ros__parameters:
+    # --- mode (overridden by the launch arg) ---
+    mode: sim_only                 # sim_only | real_only | both
+
+    # --- safety / motion (Rubric ③, course 25 cm dual-LiDAR stop) ---
+    stop_distance_m: 0.25          # forward block if EITHER scan < this
+    front_sector_rad: 0.70         # +/-0.35 rad cone treated as "ahead"
+    max_linear_mps: 0.22           # Burger max forward speed
+    max_angular_radps: 2.0         # capped below the 2.84 hardware max for smoothness
+    scan_range_min_m: 0.12         # LDS-02
+    scan_range_max_m: 3.5          # LDS-02
+
+    # --- rates ---
+    cmd_rate_hz: 20.0
+    sync_rate_hz: 5.0
+    health_rate_hz: 1.0
+
+    # --- staleness windows (fail-safe: stale considered-scan => blocked) ---
+    max_cmd_age_s: 0.5
+    max_data_age_s: 1.0
+
+    # --- STATE SYNC & TOLERANCES (Rubric ②: documented thresholds + alerts) ---
+    tol_pose_xy_m: 0.15            # real-vs-sim XY tolerance; exceed => /dt/sync_ok=false + /dt/alerts
+    tol_pose_yaw_rad: 0.26        # ~15 deg heading tolerance
+    tol_sensor_range_m: 0.20      # real-vs-sim front-range discrepancy tolerance
+    latency_budget_ms: 250.0      # command->motion + scan-age budget; exceed => alert
+    sync_log_csv: "sync_metrics"  # CSV prefix; sync_supervisor appends <prefix>_<stamp>.csv
+    sync_log_enable: true
+
+    # --- battery (non-motion state sync) ---
+    battery_low_v: 11.0
+    battery_critical_v: 10.5       # real battery below this => auto E-STOP on /dt/estop
+    # synthetic battery for sim_only (so battery state-sync is demonstrable without a robot):
+    battery_sim_start_v: 12.5
+    battery_sim_drain_vps: 0.02
+    battery_sim_min_v: 11.2        # stays green; demo only
+
+    # --- mission / spray (Rubric ③ task interaction) ---
+    spray_seconds: 5.0             # spin-in-place duration at the bloom centre
+    spray_omega_radps: 1.0
+    standoff_m: 0.0                # 0 => Nav2 goal IS the bloom centre
+    center_tol_m: 0.50             # GROSS arrival sanity bound (sim_only only); Nav2 xy_goal_tolerance
+                                   # (0.15) is authoritative. Generous so deceleration pose-lag never
+                                   # false-rejects a real arrival.
+    nav_goal_timeout_s: 60.0
+
+    # --- map (course base map; world<->pixel transforms for the GUI) ---
+    map_resolution: 0.05
+    map_origin_x: -2.051
+    map_origin_y: -4.194
+    map_width_px: 86
+    map_height_px: 110
