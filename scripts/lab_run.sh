@@ -81,8 +81,11 @@ ensure_docker() {
   docker info >/dev/null 2>&1 || die "rootless dockerd did not come up (see /tmp/dockerd-rootless.log)."
   ROOTLESS=1
   log OK "rootless docker up"
+  # ROOTLESS IS A DEAD-END FOR THE REAL ROBOT: rootless `--net=host` attaches to RootlessKit's own
+  # network namespace (slirp4netns), which carries no LAN multicast — so ROS 2 DDS discovery to the
+  # Burger does NOT work. A REAL-robot demo therefore cannot run rootless; FAIL instead of pretending.
   if [ "$MODE" != "sim_only" ]; then
-    log WARN "rootless Docker + --net=host may NOT reach the robot over DDS. If real/both can't see /scan, use rootful Docker (TA-provided) for the hardware demo; sim_only works fine rootless."
+    die "rootless Docker cannot reach the robot over DDS (--net=host = RootlessKit ns, no LAN multicast), so '$MODE' (real robot) WILL NOT connect. Use ROOTFUL Docker for the hardware demo (ask a TA to enable it / add you to the docker group). Right now you can: './scripts/lab_run.sh sim_only', or run the twin HARDWARE-FREE with the fake robot:  ros2 launch algae_dt bringup.launch.py mode:=both use_fake_robot:=true"
   fi
 }
 
@@ -144,11 +147,13 @@ log INFO "launching inside '$IMAGE' (Ctrl-C to stop)"
 echo "   teleop in another terminal:  docker exec -it $CONTAINER bash -lc 'source /opt/ros/jazzy/setup.bash; source /opt/turtlebot3_ws/install/setup.bash 2>/dev/null; source /ws/install/setup.bash; ros2 run turtlebot3_teleop teleop_keyboard --ros-args -r /cmd_vel:=/dt/cmd_vel_raw'" >&2
 echo >&2
 
+NEED_ROBOT=0; [ "$MODE" != "sim_only" ] && NEED_ROBOT=1
+
 exec docker run --rm -it --name "$CONTAINER" --net=host \
   -e DISPLAY="${DISPLAY:-:0}" -e QT_X11_NO_MITSHM=1 -v /tmp/.X11-unix:/tmp/.X11-unix \
   -v "$WS:/ws" -w /ws -e HOME=/ws \
   -e TURTLEBOT3_MODEL=burger -e ROS_DOMAIN_ID="$DOMAIN" \
-  -e MODE="$MODE" -e HEADLESS="$HEADLESS" \
+  -e MODE="$MODE" -e HEADLESS="$HEADLESS" -e NEED_ROBOT="$NEED_ROBOT" \
   "${USER_ARG[@]}" "$IMAGE" bash -lc '
     set -e
     source /opt/ros/jazzy/setup.bash
@@ -157,6 +162,18 @@ exec docker run --rm -it --name "$CONTAINER" --net=host \
     if ! ros2 pkg prefix turtlebot3_gazebo >/dev/null 2>&1; then
       echo "FATAL: turtlebot3 stack not resolvable inside the image (checked /opt/ros/jazzy and"
       echo "       /opt/turtlebot3_ws/install). This image lacks the stock turtlebot3 packages."; exit 4
+    fi
+    # PROVE the real-robot connection before launching (real_only/both): the robot Pi bringup must be
+    # up; if /scan is not visible from inside the container in 40 s, FAIL (do not run a broken demo).
+    if [ "${NEED_ROBOT:-0}" = 1 ]; then
+      echo "-- verifying robot connection: waiting up to 40s for /scan from inside the container --"
+      ok=0; for _ in $(seq 1 40); do ros2 topic list 2>/dev/null | grep -qx /scan && { ok=1; break; }; sleep 1; done
+      if [ "$ok" != 1 ]; then
+        echo "FATAL: robot /scan NOT visible from inside the container. Causes: the robot Pi bringup"
+        echo "       isnt running, wrong ROS_DOMAIN_ID, not on Wi-Fi AP2IRR10, or Docker networking"
+        echo "       cannot reach the robot. Fix and re-run; do not record a demo without the real link."; exit 5
+      fi
+      echo "-- robot /scan visible: real connection OK --"
     fi
     echo "-- colcon build --packages-select algae_dt --"
     colcon build --packages-select algae_dt

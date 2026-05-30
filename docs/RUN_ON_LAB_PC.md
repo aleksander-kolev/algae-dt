@@ -53,13 +53,18 @@ ros2 run turtlebot3_teleop teleop_keyboard --ros-args -r /cmd_vel:=/dt/cmd_vel_r
 4. Verifies turtlebot3 resolves **inside** the container (`ros2 pkg prefix turtlebot3_gazebo`) and
    aborts loudly if not. (On the bare host `ros2 pkg list | grep turtlebot3` is EXPECTED EMPTY.)
 
-**Honest limits of the fallbacks (the script says these, never silently fails):**
-- Rootless Docker needs the **`uidmap`** tools (root to install) + **internet**; and rootless
-  `--net=host` **may not reach the robot over DDS** → for the real/both hardware demo prefer rootful
-  Docker (TA-provided); `sim_only` works fine rootless.
-- Building the fallback image needs **internet** (base pull + apt) and **~10–20 min**.
-- If neither Docker can be obtained nor an image built (fully offline, no `uidmap`) → that's a
-  genuine blocker for a TA, not something any script can conjure.
+**Does the FULL worst path run the real robot? — NO, and the script FAILS instead of faking it.**
+- **Image-build fallback:** ✅ all modes (the built image has the full stock stack) — *given rootful Docker*.
+- **Rootless-Docker fallback:** ✅ `sim_only` (and `both use_fake_robot:=true`, hardware-free), but
+  ❌ **the real-robot connection.** Rootless `--net=host` attaches to RootlessKit's own namespace
+  (slirp4netns) which carries **no LAN multicast**, so ROS 2 DDS discovery to the Burger can't work.
+  → the script **hard-fails** `real_only`/`both` under rootless (pointing you to rootful Docker or the
+  fake-robot demo). The **real-robot demo requires ROOTFUL Docker** (`--net=host`, course-proven).
+- **The script PROVES the real link before launching:** in `real_only`/`both` it waits ≤40 s for
+  `/scan` *inside the container* and **exits non-zero** if the robot isn't visible (Pi bringup down /
+  wrong domain / wrong Wi-Fi / Docker networking) — it never records a demo on a dead link.
+- Rootless install needs **`uidmap`** (root) + internet; the fallback image build needs internet + ~10–20 min.
+- Fully offline + no `uidmap`, or rootless-only on a real-robot demo → genuine TA blocker; the script says so.
 
 ## 3. Robot bringup (robot Pi — native; the script prints this for real/both)
 ```bash
