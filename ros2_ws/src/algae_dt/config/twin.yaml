@@ -67,6 +67,7 @@
     # --- mission / spray (Rubric ③ task interaction) ---
     spray_seconds: 5.0             # spin-in-place duration at the bloom centre
     spray_omega_radps: 1.0
+    bloom_radius_m: 0.15           # drawn marker radius + mission bookkeeping (operator_gui/mission)
     standoff_m: 0.0                # 0 => Nav2 goal IS the bloom centre
     center_tol_m: 0.50             # GROSS arrival sanity bound (sim_only only); Nav2 xy_goal_tolerance
                                    # (0.15) is authoritative. Generous so deceleration pose-lag never
