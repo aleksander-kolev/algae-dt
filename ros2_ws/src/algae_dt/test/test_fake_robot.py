@@ -96,9 +96,10 @@ def test_bidirectional_loop_through_mediator():
     for n in (bot, med, har):
         ex.add_node(n)
     try:
+        _spin_until(ex, lambda: False, secs=1.5)   # let the 4-hop discovery chain settle
         har.vx = 0.2                       # operator/Nav2 commands forward on the bus
         # gated cmd reaches the fake robot, which moves; its odom is mirrored to /dt/real_pose
-        assert _spin_until(ex, lambda: har.real_x is not None and har.real_x > 0.02, secs=8.0), \
+        assert _spin_until(ex, lambda: har.real_x is not None and har.real_x > 0.02, secs=15.0), \
             "digital->real->digital loop: commanding the bus moves the (fake) real robot"
         assert har.got_scan_active, "real /scan is republished to /dt/scan_active"
     finally:
