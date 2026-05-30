@@ -41,6 +41,11 @@ def yaw_from_quaternion(z: float, w: float) -> float:
     return math.atan2(2.0 * w * z, 1.0 - 2.0 * z * z)
 
 
+def quaternion_from_yaw(yaw: float) -> tuple[float, float]:
+    """(z, w) of the planar unit quaternion for a heading (x=y=0). Inverse of yaw_from_quaternion."""
+    return math.sin(yaw / 2.0), math.cos(yaw / 2.0)
+
+
 def angle_diff(a: float, b: float) -> float:
     """Smallest signed difference a-b wrapped to (-pi, pi]."""
     d = (a - b + math.pi) % (2.0 * math.pi) - math.pi

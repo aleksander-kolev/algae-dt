@@ -76,6 +76,19 @@ class ScanStatus:
     age_s: float       # seconds since the scan stamp (node clock)
 
 
+def limit_command(vx: float, wz: float, *, blocked: bool, estop: bool,
+                  max_linear: float, max_angular: float) -> tuple[float, float]:
+    """Shape one commanded (vx, wz) for output: full-stop on E-STOP, clamp to the Burger limits,
+    and zero FORWARD motion when the safety gate blocks (rotation and reverse still allowed)."""
+    if estop:
+        return 0.0, 0.0
+    vx = max(-max_linear, min(max_linear, vx))
+    wz = max(-max_angular, min(max_angular, wz))
+    if blocked and vx > 0.0:
+        vx = 0.0
+    return vx, wz
+
+
 def gate(real: ScanStatus, sim: ScanStatus,
          stop_distance_m: float, max_data_age_s: float) -> bool:
     """Forward-motion block decision for the dual-LiDAR twin, fail-safe.

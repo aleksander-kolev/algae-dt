@@ -162,3 +162,40 @@ def test_gate_sim_only_ignores_absent_real_but_honors_sim_obstacle():
     real = _status(has_data=False)
     sim = _status(has_data=True, front_min=0.20, age_s=0.1)
     assert safety.gate(real, sim, stop_distance_m=0.25, max_data_age_s=1.0) is True
+
+
+# ------------------------------ limit_command ------------------------------
+# Pure command-shaping the mediator applies every cycle: clamp to the Burger limits, zero forward
+# when the gate blocks (rotation still allowed), and full-stop on E-STOP.
+
+def test_limit_command_estop_zeros_everything():
+    assert safety.limit_command(0.22, 2.0, blocked=False, estop=True,
+                                 max_linear=0.22, max_angular=2.0) == (0.0, 0.0)
+
+
+def test_limit_command_clamps_to_limits():
+    vx, wz = safety.limit_command(1.0, 5.0, blocked=False, estop=False,
+                                  max_linear=0.22, max_angular=2.0)
+    assert vx == 0.22 and wz == 2.0
+    vx, wz = safety.limit_command(-1.0, -5.0, blocked=False, estop=False,
+                                  max_linear=0.22, max_angular=2.0)
+    assert vx == -0.22 and wz == -2.0
+
+
+def test_limit_command_blocked_zeros_forward_keeps_rotation():
+    vx, wz = safety.limit_command(0.20, 1.0, blocked=True, estop=False,
+                                  max_linear=0.22, max_angular=2.0)
+    assert vx == 0.0 and wz == 1.0
+
+
+def test_limit_command_blocked_allows_reverse():
+    # Backing away from an obstacle is permitted; only forward motion is cut.
+    vx, wz = safety.limit_command(-0.1, 0.5, blocked=True, estop=False,
+                                  max_linear=0.22, max_angular=2.0)
+    assert vx == -0.1 and wz == 0.5
+
+
+def test_limit_command_clear_passes_through():
+    vx, wz = safety.limit_command(0.1, 0.5, blocked=False, estop=False,
+                                  max_linear=0.22, max_angular=2.0)
+    assert vx == 0.1 and wz == 0.5
