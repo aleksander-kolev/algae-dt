@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<!-- Standalone obstacle for the pillar-III "live environment change" demo. Spawn it into a running
+     sim to make the robot's LiDAR see a NEW obstacle (dual-LiDAR stop) or force a Nav2 reroute:
+       ros2 run ros_gz_sim create -world default -name algae_obstacle -x 0.6 -y 0.0 -z 0.25 \
+         -file $(ros2 pkg prefix algae_dt)/share/algae_dt/worlds/obstacle_box.sdf
+     dynamic_obstacle moves it along a sinusoidal path (see that node). Static so set_pose teleports
+     it cleanly without physics fighting. -->
+<sdf version="1.8">
+  <model name="algae_obstacle">
+    <static>true</static>
+    <pose>0 0 0.25 0 0 0</pose>
+    <link name="link">
+      <collision name="collision">
+        <geometry><box><size>0.3 0.3 0.5</size></box></geometry>
+      </collision>
+      <visual name="visual">
+        <geometry><box><size>0.3 0.3 0.5</size></box></geometry>
+        <material>
+          <ambient>0.85 0.2 0.2 1</ambient>
+          <diffuse>0.85 0.2 0.2 1</diffuse>
+          <specular>0.3 0.3 0.3 1</specular>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>

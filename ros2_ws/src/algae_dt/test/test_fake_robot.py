@@ -17,6 +17,7 @@ from rclpy.executors import SingleThreadedExecutor                # noqa: E402
 from rclpy.node import Node                                        # noqa: E402
 from rclpy.parameter import Parameter                              # noqa: E402
 from sensor_msgs.msg import BatteryState, LaserScan               # noqa: E402
+from std_msgs.msg import Bool                                      # noqa: E402
 
 from algae_dt.fake_robot import FakeRobot                          # noqa: E402
 from algae_dt.twin_mediator import TwinMediator                    # noqa: E402
@@ -85,6 +86,45 @@ class BusHarness(Node):
         self.create_subscription(PoseStamped, '/dt/real_pose', lambda m: setattr(self, 'real_x', m.pose.position.x), 10)
         self.create_subscription(LaserScan, '/dt/scan_active', lambda m: setattr(self, 'got_scan_active', True), qos_profile_sensor_data)
         self.create_timer(1.0 / 30.0, lambda: self.p_bus.publish(TwistStamped(twist=_t(self.vx))))
+
+
+class SafetyHarness(Node):
+    """Commands forward on the bus; watches the gated /cmd_vel + /dt/safety."""
+
+    def __init__(self):
+        super().__init__('safety_harness')
+        self.vx = 0.0
+        self.cmd_x = None
+        self.safety = None
+        from rclpy.qos import (DurabilityPolicy, QoSProfile, ReliabilityPolicy)
+        latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                             durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.p_bus = self.create_publisher(TwistStamped, '/dt/cmd_vel_raw', 10)
+        self.create_subscription(TwistStamped, '/cmd_vel', lambda m: setattr(self, 'cmd_x', m.twist.linear.x), 10)
+        self.create_subscription(Bool, '/dt/safety', lambda m: setattr(self, 'safety', m.data), latched)
+        self.create_timer(1.0 / 30.0, lambda: self.p_bus.publish(TwistStamped(twist=_t(self.vx))))
+
+
+def test_front_obstacle_triggers_safety_stop_through_mediator():
+    # Pillar III, hardware-free: a 20 cm obstacle on the (fake) real robot's /scan must zero forward
+    # motion at the mediator and raise /dt/safety, even while forward is commanded on the bus.
+    rclpy.init()
+    bot = FakeRobot(parameter_overrides=[Parameter('fake_front_m', Parameter.Type.DOUBLE, 0.2)])
+    med = TwinMediator(parameter_overrides=[Parameter('mode', Parameter.Type.STRING, 'real_only')])
+    har = SafetyHarness()
+    ex = SingleThreadedExecutor()
+    for n in (bot, med, har):
+        ex.add_node(n)
+    try:
+        _spin_until(ex, lambda: False, secs=1.5)
+        har.vx = 0.2
+        assert _spin_until(ex, lambda: har.safety is True, secs=8.0), "front obstacle raises /dt/safety"
+        assert _spin_until(ex, lambda: har.cmd_x == 0.0, secs=3.0), "forward motion is zeroed at the gate"
+    finally:
+        ex.shutdown()
+        for n in (bot, med, har):
+            n.destroy_node()
+        rclpy.shutdown()
 
 
 def test_bidirectional_loop_through_mediator():

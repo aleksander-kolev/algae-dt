@@ -37,6 +37,7 @@ setup(
             'mission_runner = algae_dt.mission_runner:main',
             'operator_gui = algae_dt.operator_gui:main',
             'fake_robot = algae_dt.fake_robot:main',
+            'dynamic_obstacle = algae_dt.dynamic_obstacle:main',
         ],
     },
 )
