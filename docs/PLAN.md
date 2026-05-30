@@ -9,6 +9,14 @@ pure libs, integration-tested in `sim_only` before it ever goes to the lab. Task
 > exact triggers. **Option A is mandatory** (Option B caps at 7/12). Submission package + demo script:
 > `docs/SUBMISSION.md`, `docs/DEMO_SCRIPT.md`. Due **Mon 22 Jun 2026 21:00**.
 
+> **IMPLEMENTATION STATUS — Phases 1→6 DONE, TDD, integration-verified.** All 8 pure libs + 4 nodes
+> (+ `fake_robot`, `dynamic_obstacle`) implemented; full `bringup.launch.py` (sim_only|real_only|both
+> + headless/use_fake_robot); reproducible `algae-dt:dev` image. **103 tests pass** + clean
+> `colcon build`; `sim_only` runs end-to-end headless (Nav2 active, AMCL localized, TwistStamped
+> chokepoint); `both` collision-free. Evidence per deliverable → `docs/VERIFICATION.md`. Remaining is
+> NON-code: the Week-9 demo video + lab-hardware validation, and the full navigate-and-spray demo on a
+> GPU host (headless GPU-less Docker throttles Nav2 at ~2 Hz software-render LiDAR — see VERIFICATION).
+
 > Migration note: port reusable logic from the old `algae-twin` repo's pure libs
 > (`geometry/safety/blooms/sync/pgm`) — they're ROS-free and already unit-tested — and DROP all the
 > robot-description scaffolding (SDF/URDF/`ground_truth_localizer`/custom teleop/Nav2 params), which

@@ -18,37 +18,42 @@ The three criteria → our deliverables:
 - **③ Environmental** — 25 cm dual-LiDAR stop mirrored on BOTH robots + Nav2 dynamic-obstacle avoidance
   + navigate-and-spray; **introduce a live environment change** in the demo.
 
-## State: DONE vs NOT DONE  (as of commit on `main`; repo: github.com/aleksander-kolev/algae-dt)
-**DONE:** all docs; **7 pure libs implemented + TDD** (safety/blooms/sync/metrics/geometry/pgm/hud —
-**82 tests pass**); **4 nodes implemented** (twin_mediator, sync_supervisor, mission_runner,
-operator_gui); **`bringup.launch.py` fully wired** (gz sim into our world + Nav2 via `RewrittenYaml`
-+ DT nodes); Docker dev image (`docker/Dockerfile`); submission package + demo script.
-**NOT DONE / AT RISK (your job) — the integrated launch has NEVER run in ROS/Gazebo; only unit tests
-pass.** Before trusting it (see `docs/RUN_ON_LAB_PC.md` §0 readiness):
-1. **Smoke-test `mode:=sim_only` in the turtlebot3_ws container** (`colcon build` + launch + `ros2 topic hz /scan`).
-2. **gz↔ROS bridge:** the launch starts `gz_sim`+spawn but no explicit `ros_gz parameter_bridge` —
-   confirm `/scan`,`/odom`,`/cmd_vel`,`/clock` reach ROS; if not, add a bridge (or use turtlebot3_gazebo's
-   world launch which bundles it).
-3. **`both`-mode `/sim/*` namespacing (PLAN T5.1):** the mediator expects the mirror sim on
-   `/sim/scan`,`/sim/odom` and publishes `/sim/cmd_vel`, but the launch spawns the sim on BARE topics →
-   collides with the real robot. Namespace/remap the sim before `both` works.
-4. Verify the Nav2 `RewrittenYaml` keys exist in turtlebot3_navigation2 `param/burger.yaml`
-   (`collision_monitor.cmd_vel_out_topic`, `set_initial_pose`).
-5. Record the demo video (`docs/DEMO_SCRIPT.md`).
-Then finish any remaining `docs/PLAN.md` items. `real_only` and `sim_only` are closest to working;
-`both` needs item 3.
+## State: DONE — Phases 1→6 implemented, TDD, and integration-verified (see `docs/VERIFICATION.md`)
+**DONE:** 8 pure libs (safety/blooms/sync/metrics/geometry/pgm/hud/trajectory) + 4 nodes
+(twin_mediator, sync_supervisor, mission_runner, operator_gui) + `fake_robot` + `dynamic_obstacle`;
+full `bringup.launch.py` (sim_only | real_only | both, with `headless`/`use_rviz`/`use_fake_robot`);
+`/sim/*` bridge for `both`; reproducible **`algae-dt:dev`** Docker image (`docker/`, `docs/DOCKER.md`).
+**103 tests pass** + clean `colcon build`. The five old open items are RESOLVED & verified in-container:
+(1) `mode:=sim_only` smoke-tested (Nav2 active + AMCL localized, `/scan` flows) — `docker/sim_smoke.sh`;
+(2) gz↔ROS bridge confirmed (the stock spawn bundles `parameter_bridge`; `/scan /odom /cmd_vel /clock`
+reach ROS); (3) `both` `/sim/*` namespacing done (custom bridge + namespaced RSP, collision-free);
+(4) Nav2 rewrite keys (`collision_monitor.cmd_vel_out_topic`, `set_initial_pose`) verified present in
+`burger.yaml`; (5) the cmd_vel chokepoint is TwistStamped end-to-end.
 
-## Implementation order (do NOT skip TDD)
-Follow `docs/PLAN.md`. **Start with Phase 1:**
-1. **T1.3 `lib/safety.py`** — write failing tests first (front-sector min range; fail-safe staleness;
-   dual-scan OR-block; NaN/inf; wrap-around). Then implement. `front_sector_rad` is FULL width.
-2. **T1.4 `twin_mediator` v1** — sub `/dt/cmd_vel_raw`(TwistStamped) + `/sim/scan`; 25 cm gate; pub
-   `/sim/cmd_vel` (verify type with `ros2 topic type`).
-3. **T1.1 sim launch** — add the `turtlebot3_gazebo` bring-up into our `algae_arena.world` (gz_sim +
-   spawn + RSP + ros_gz bridge), and a Nav2 `params_file` (RewrittenYaml) with
-   `enable_stamped_cmd_vel: true` + `set_initial_pose` to the spawn pose.
-Then Phase 2 (mediator full + mission_runner), Phase 3 (sync_supervisor), Phase 4 (GUI), Phase 5
-(`both` + hardware), Phase 6 (scenarios + video).
+**REMAINING (environment/process — not code):**
+- Full **navigate-and-spray COMPLETION is throttled on a GPU-less Docker host** (~2 Hz software-render
+  LiDAR → Nav2 `collision_monitor` rejects stale scans). The robot navigates via the full chain
+  (proven); run the full demo on a **GPU host / the lab laptop** (5 Hz scan). Completion logic is
+  unit-proven (`test_mission_runner.py`). Details: `docs/VERIFICATION.md` + BEST_APPROACHES §Lessons.
+- **Record the Week-9 demo video** (`docs/DEMO_SCRIPT.md`) on a GPU host, and **validate on lab
+  hardware** (`real_only`/`both` on the Burger; `scripts/lab_run.sh`, `docs/RUN_ON_LAB_PC.md`).
+
+> ⚠️ **Shared branch:** this branch (`feat/poc-implementation`) also received `feat(lab)` commits
+> (lab_run.sh / RUN_ON_LAB_PC.md) from a parallel effort. If two sessions edit at once, coordinate to
+> avoid clobbering the working tree.
+
+## What's next (implementation is done — these are lab/demo steps)
+1. **GPU host:** `bash docker/run.sh` → inside, `ros2 launch algae_dt bringup.launch.py mode:=sim_only`
+   (display). Drive the GUI, place blooms, Start; record the baseline video per `docs/DEMO_SCRIPT.md`.
+   Hardware-free `both`: `mode:=both use_fake_robot:=true`.
+2. **Lab:** connect to the Burger (SETUP §3), then `mode:=real_only` / `mode:=both`
+   (`scripts/lab_run.sh`, `docs/RUN_ON_LAB_PC.md`). Validate the 25 cm stop on real `/scan`, AMCL
+   2D-Pose-Estimate, one bloom navigate+spray, the `both` mirror.
+3. **Verify anytime:** `docker run --rm -v "$PWD/ros2_ws:/ws" -v "$PWD/docker:/ci" algae-dt:dev bash
+   /ci/ci.sh` (103 tests + build). Evidence map: `docs/VERIFICATION.md`.
+
+> Re-implementing? The TDD recipe still holds: failing test (pure libs) → minimal impl → `colcon
+> build --packages-select algae_dt` → `pytest src/algae_dt/test` → run in `sim_only` → commit.
 
 ## HARD INVARIANTS (read `docs/RULES.md` — breaking these fails silently)
 1. **Bus = `TwistStamped`**; mediator forwards to real `/cmd_vel` (TwistStamped); set Nav2
