@@ -88,7 +88,8 @@ green build + a run.** Build/test recipe: `docs/SETUP.md` §1 (container) or §2
 | `docs/COURSE_COVERAGE.md` | Every course artifact → where used. |
 
 ## Environment quick ref
-Build/run in the `turtlebot3_ws` Docker container (home) or native lab laptop. Default:
-`ros2 launch algae_dt bringup.launch.py mode:=sim_only`. Lab verification first:
-`ros2 pkg list | grep -E "turtlebot3|nav2_simple_commander"`. Robot: Wi-Fi `AP2IRR10`,
-`ROS_DOMAIN_ID=<robot#>`, `ssh turtlebot@<ip>` → `turtlebot3_bringup robot.launch.py`.
+Everything runs in the course `turtlebot3_ws` Docker container (turtlebot3 is in the image, NOT the
+bare host — D1). **One command, from a fresh clone:** `./scripts/lab_run.sh sim_only` (home) or
+`ROS_DOMAIN_ID=<robot#> ./scripts/lab_run.sh real_only` (lab) — it recreates `~/turtlebot3_ws`, copies
+the package, builds, and launches. Full flow + provenance: `docs/RUN_ON_LAB_PC.md`. Robot: Wi-Fi
+`AP2IRR10`, `ssh turtlebot@<ip>` → `turtlebot3_bringup robot.launch.py`.

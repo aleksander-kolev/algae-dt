@@ -97,7 +97,25 @@ Confirmed before implementation:
   `exec_depend`s on the node package — never the reverse (a cycle makes colcon build nothing →
   `ModuleNotFoundError`). We keep ONE package to sidestep this entirely.
 - **`set -u` + sourcing ROS/colcon setup = silent shell exit.** Wrap `source …/setup.bash` in
-  `set +u … set -u` in any script.
+  `set +u … set -u` in any script. (Hit in `docker/ci.sh`: `AMENT_TRACE_SETUP_FILES: unbound`.)
+- **Nav2 cmd_vel topology (Jazzy turtlebot3):** controller_server→`cmd_vel`→velocity_smoother→
+  `cmd_vel_smoothed`→**collision_monitor→`cmd_vel`** (final to the robot). The stock `burger.yaml`
+  already sets `enable_stamped_cmd_vel: true` everywhere, so the whole chain is TwistStamped. To make
+  the mediator the single chokepoint, **rewrite collision_monitor's `cmd_vel_out_topic` →
+  `/dt/cmd_vel_raw`** via `RewrittenYaml` (a blanket `SetRemap('/cmd_vel',…)` is WRONG — controller
+  *and* collision_monitor both use `cmd_vel`, so it would double-publish the bus). Also flip
+  `set_initial_pose: True` for headless sim_only AMCL auto-seed. (Verified in `bringup.launch.py`.)
+- **Headless Gazebo render rate throttles autonomy (verified, host limitation — NOT a code bug).**
+  `gz sim -s --headless-rendering` renders the LiDAR via **software rasterization (swrast)** when no
+  GPU is exposed to Docker → `/scan` runs ~2 Hz instead of 5 Hz. Nav2's `collision_monitor` then
+  rejects the stale scans ("invalid source / impossible to transform to base frame") and stop-and-go
+  throttles the robot: in `docker/mission_smoke.py` the robot navigates (moves ~0.26 m via the full
+  mission→Nav2→bus→mediator→`/cmd_vel`→gz chain — integration PROVEN) but rarely *arrives*. The fix
+  is GPU-rate LiDAR: run the full navigate-and-spray demo on the **lab laptop / a GPU host** (5 Hz
+  scan → Nav2 completes normally). Mission *completion* logic (arrive→spray→treated / fail→skipped /
+  stop→pending) is proven hardware-free by the fake-navigator unit tests (`test_mission_runner.py`).
+  `docker/sim_smoke.sh` (topic/type/flow check) is the headless acceptance gate; `mission_smoke.sh`
+  is the GPU-host end-to-end check.
 
 ## TA-familiar fallback: the manual multi-terminal launch
 If a combined `bringup.launch.py` misbehaves in the lab, fall back to the course's per-component

@@ -62,9 +62,12 @@ nodes, stable in long sessions — "strongly recommended for 2IRR10".
 
 ---
 
-## 2. LAB — the HP Z-Book (native ROS 2, TESTING ONLY)
-The lab laptop runs ROS 2 Jazzy + the turtlebot3 stack **natively** (course "If you use Lab Laptop"
-sections use `~/turtlebot3_ws/src` with plain `colcon`/`ros2`, no `docker run`).
+## 2. LAB — the HP Z-Book (TESTING ONLY)
+**Canonical path = the Docker container** (turtlebot3 lives in the `turtlebot3_ws` image, not the bare
+host — `docs/DECISIONS.md` D1). Use the one script: `./scripts/lab_run.sh <mode>` (see
+`docs/RUN_ON_LAB_PC.md`). The native commands below are a **fallback ONLY if** the host turns out to
+have turtlebot3 natively (`ros2 pkg list | grep turtlebot3` non-empty); on the bare host that grep is
+expected empty.
 
 **First thing, every session — verify the environment (10 s, settles the old "no turtlebot3" doubt):**
 ```bash
