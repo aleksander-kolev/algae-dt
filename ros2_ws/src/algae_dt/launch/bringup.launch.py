@@ -1,24 +1,23 @@
 """bringup.launch.py — orchestrates the DEFAULT turtlebot3 stack + our algae_dt DT layer.
 
-    ros2 launch algae_dt bringup.launch.py mode:=sim_only            # home dev (default)
+    ros2 launch algae_dt bringup.launch.py mode:=sim_only                  # home dev (default)
     ros2 launch algae_dt bringup.launch.py mode:=sim_only headless:=true   # CI / no display
-    ros2 launch algae_dt bringup.launch.py mode:=real_only          # robot bringup runs on the Pi
-    ros2 launch algae_dt bringup.launch.py mode:=both               # real leads, sim mirrors (/sim/*)
+    ros2 launch algae_dt bringup.launch.py mode:=real_only                 # robot bringup on the Pi
+    ros2 launch algae_dt bringup.launch.py mode:=both                      # real leads, sim mirrors
+    ros2 launch algae_dt bringup.launch.py mode:=both use_fake_robot:=true # both, hardware-free @home
 
-Modes (RULES/SETUP/DECISIONS): sim_only develops at home; real_only/both are tested in the lab.
-Built with an OpaqueFunction so mode/headless are plain Python booleans (clearer than nested
-substitutions).
+Built with an OpaqueFunction so mode/headless are plain Python booleans.
 
-cmd_vel TYPE CONTRACT (RULES §B-1/§B-2, verified in the container): the stock turtlebot3
-`burger.yaml` already sets `enable_stamped_cmd_vel: true` on controller/behavior/smoother/
-collision_monitor, so Nav2 speaks TwistStamped — same as the real turtlebot3_node, teleop and the
-gz bridge. We route Nav2's FINAL velocity into our safety chokepoint by rewriting the
-collision_monitor `cmd_vel_out_topic` to /dt/cmd_vel_raw (a blanket /cmd_vel remap would double the
-bus because controller + collision_monitor both use `cmd_vel` internally). The mediator gates
-/dt/cmd_vel_raw and republishes /cmd_vel to the robot (+ /sim/cmd_vel in `both`).
+Topic model (RULES §B-3): the ACTIVE robot is on BARE topics (/scan,/odom,/cmd_vel,/battery_state)
+— in sim_only that bare robot IS the Gazebo robot; in real_only/both it is the real Burger (or
+fake_robot at home). In `both` the mirroring sim lives entirely on /sim/* (config/sim_bridge.yaml +
+namespaced RSP, sim TF off the global /tf), so it never collides with the real robot's bare topics.
 
-sim_only AMCL auto-seed: the params_file flips `set_initial_pose:true` (initial_pose 0,0,0 = the
-Gazebo spawn) so headless sim_only localises with no human 2D-Pose-Estimate.
+cmd_vel chokepoint (RULES §B-1/§B-2, verified in-container): stock burger.yaml already sets
+enable_stamped_cmd_vel:true everywhere (TwistStamped end-to-end). We rewrite collision_monitor's
+cmd_vel_out_topic -> /dt/cmd_vel_raw so Nav2's FINAL velocity passes through the mediator's safety
+gate before reaching /cmd_vel (+ /sim/cmd_vel mirror in `both`). sim_only flips set_initial_pose:true
+for headless AMCL auto-seed (D8: use_sim_time true ONLY in sim_only).
 """
 import os
 
@@ -42,6 +41,41 @@ def _gz_sim(gz_args: str):
         launch_arguments={'gz_args': gz_args, 'on_exit_shutdown': 'true'}.items())
 
 
+def _sim_bringup(pkg, world, headless):
+    """sim_only: stock bare-topic Gazebo robot (model + RSP + bare ros_gz bridge)."""
+    actions = [_gz_sim('-r -s -v2 ' + ('--headless-rendering ' if headless else '') + world)]
+    if not headless:
+        actions.append(_gz_sim('-g -v2 '))
+    actions.append(IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(_src('turtlebot3_gazebo', 'launch', 'robot_state_publisher.launch.py')),
+        launch_arguments={'use_sim_time': 'true'}.items()))
+    actions.append(IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(_src('turtlebot3_gazebo', 'launch', 'spawn_turtlebot3.launch.py')),
+        launch_arguments={'x_pose': '0.0', 'y_pose': '0.0'}.items()))
+    return actions
+
+
+def _sim_mirror(pkg, world, headless):
+    """both: the Gazebo mirror pushed entirely onto /sim/* (custom bridge + namespaced RSP)."""
+    model_sdf = _src('turtlebot3_gazebo', 'models', 'turtlebot3_burger', 'model.sdf')
+    urdf = _src('turtlebot3_gazebo', 'urdf', 'turtlebot3_burger.urdf')
+    with open(urdf, 'r') as f:
+        robot_desc = f.read()
+    actions = [_gz_sim('-r -s -v2 ' + ('--headless-rendering ' if headless else '') + world)]
+    if not headless:
+        actions.append(_gz_sim('-g -v2 '))
+    actions += [
+        Node(package='robot_state_publisher', executable='robot_state_publisher', output='screen',
+             parameters=[{'use_sim_time': False, 'robot_description': robot_desc, 'frame_prefix': 'sim/'}],
+             remappings=[('/tf', '/sim/tf'), ('/tf_static', '/sim/tf_static')]),
+        Node(package='ros_gz_sim', executable='create', output='screen',
+             arguments=['-name', 'burger_sim', '-file', model_sdf, '-x', '0.0', '-y', '0.0', '-z', '0.01']),
+        Node(package='ros_gz_bridge', executable='parameter_bridge', output='screen',
+             arguments=['--ros-args', '-p', f"config_file:={os.path.join(pkg, 'config', 'sim_bridge.yaml')}"]),
+    ]
+    return actions
+
+
 def launch_setup(context, *args, **kwargs):
     pkg = get_package_share_directory('algae_dt')
     params = os.path.join(pkg, 'config', 'twin.yaml')
@@ -51,9 +85,8 @@ def launch_setup(context, *args, **kwargs):
     mode = LaunchConfiguration('mode').perform(context)
     headless = LaunchConfiguration('headless').perform(context).lower() == 'true'
     use_rviz = LaunchConfiguration('use_rviz').perform(context).lower() == 'true'
+    use_fake_robot = LaunchConfiguration('use_fake_robot').perform(context).lower() == 'true'
 
-    sim = mode in ('sim_only', 'both')
-    nav = mode in ('sim_only', 'real_only')        # autonomy stack (Nav2/AMCL); `both` mirrors only
     use_sim_time = (mode == 'sim_only')
     use_sim_time_str = 'true' if use_sim_time else 'false'
 
@@ -64,51 +97,42 @@ def launch_setup(context, *args, **kwargs):
                                _src('turtlebot3_gazebo', 'models') + os.pathsep + os.path.join(pkg, 'worlds')),
     ]
 
-    # ---- stock Gazebo sim into OUR arena world (sim_only/both) — PLAN T1.1 ----
-    if sim:
-        server = '-r -s -v2 ' + ('--headless-rendering ' if headless else '') + world
-        actions.append(_gz_sim(server))
-        if not headless:
-            actions.append(_gz_sim('-g -v2 '))
-        actions.append(IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(_src('turtlebot3_gazebo', 'launch', 'robot_state_publisher.launch.py')),
-            launch_arguments={'use_sim_time': use_sim_time_str}.items()))
-        actions.append(IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(_src('turtlebot3_gazebo', 'launch', 'spawn_turtlebot3.launch.py')),
-            launch_arguments={'x_pose': '0.0', 'y_pose': '0.0'}.items()))
+    if mode == 'sim_only':
+        actions += _sim_bringup(pkg, world, headless)
+    elif mode == 'both':
+        actions += _sim_mirror(pkg, world, headless)
 
-    # ---- stock Nav2 (+AMCL+map) with our rewrites (sim_only/real_only) — PLAN T1.1/T2.2 ----
-    if nav:
-        nav2_params = RewrittenYaml(
-            source_file=os.path.join(get_package_share_directory('turtlebot3_navigation2'),
-                                     'param', 'burger.yaml'),
-            param_rewrites={
-                'set_initial_pose': 'True',           # auto-localise headless sim_only at the spawn
-                'cmd_vel_out_topic': '/dt/cmd_vel_raw',  # Nav2's FINAL velocity -> our safety bus
-                'use_sim_time': use_sim_time_str,
-            },
-            convert_types=True)
-        # Include nav2_bringup DIRECTLY (not turtlebot3_navigation2's wrapper, which force-launches
-        # an RViz that aborts on a display-less host) so RViz is ours to gate on use_rviz.
-        actions.append(IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(_src('nav2_bringup', 'launch', 'bringup_launch.py')),
-            launch_arguments={'use_sim_time': use_sim_time_str,
-                              'map': map_yaml,
-                              'params_file': nav2_params,
-                              'autostart': 'true'}.items()))
+    # The real side at home (no hardware): fake_robot publishes the bare /scan /odom /cmd_vel(sub)
+    # /battery_state so real_only/both can be exercised + the topic-collision rule validated (T5.1b).
+    if use_fake_robot and mode in ('real_only', 'both'):
+        actions.append(Node(package='algae_dt', executable='fake_robot', output='screen', parameters=[params]))
+
+    # Stock Nav2 (+AMCL+map) with our rewrites — runs in every mode (on the active/bare robot).
+    rewrites = {
+        'cmd_vel_out_topic': '/dt/cmd_vel_raw',     # Nav2's FINAL velocity -> our safety bus
+        'use_sim_time': use_sim_time_str,
+    }
+    if mode == 'sim_only':
+        rewrites['set_initial_pose'] = 'True'        # headless auto-seed at the spawn (no human 2D pose)
+    nav2_params = RewrittenYaml(
+        source_file=_src('turtlebot3_navigation2', 'param', 'burger.yaml'),
+        param_rewrites=rewrites, convert_types=True)
+    actions.append(IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(_src('nav2_bringup', 'launch', 'bringup_launch.py')),
+        launch_arguments={'use_sim_time': use_sim_time_str, 'map': map_yaml,
+                          'params_file': nav2_params, 'autostart': 'true'}.items()))
 
     # ---- our DT layer (all modes); params bind via the /** wildcard in twin.yaml ----
     common = [params, {'use_sim_time': use_sim_time, 'mode': mode}]
     actions += [
         Node(package='algae_dt', executable='twin_mediator', output='screen', parameters=common),
         Node(package='algae_dt', executable='sync_supervisor', output='screen', parameters=common),
-        # NEVER set name= on mission_runner (process-wide remap trap, BEST_APPROACHES); it carries no
-        # cmd_vel remap (Nav2's final cmd_vel is rewritten to the bus above).
+        # NEVER set name= on mission_runner (process-wide remap trap, BEST_APPROACHES).
         Node(package='algae_dt', executable='mission_runner', output='screen', parameters=common),
     ]
     if not headless:
         actions.append(Node(package='algae_dt', executable='operator_gui', output='screen', parameters=common))
-    if use_rviz and nav:
+    if use_rviz:
         rviz_cfg = _src('turtlebot3_navigation2', 'rviz', 'tb3_navigation2.rviz')
         actions.append(Node(package='rviz2', executable='rviz2', arguments=['-d', rviz_cfg],
                             parameters=[{'use_sim_time': use_sim_time}], output='screen'))
@@ -117,10 +141,11 @@ def launch_setup(context, *args, **kwargs):
 
 def generate_launch_description() -> LaunchDescription:
     return LaunchDescription([
-        DeclareLaunchArgument('mode', default_value='sim_only',
-                              description='sim_only | real_only | both'),
+        DeclareLaunchArgument('mode', default_value='sim_only', description='sim_only | real_only | both'),
         DeclareLaunchArgument('headless', default_value='false',
                               description='true => gz server only (--headless-rendering), no GUI/RViz'),
         DeclareLaunchArgument('use_rviz', default_value='false'),
+        DeclareLaunchArgument('use_fake_robot', default_value='false',
+                              description='real_only/both: spawn the kinematic fake_robot (no hardware)'),
         OpaqueFunction(function=launch_setup),
     ])

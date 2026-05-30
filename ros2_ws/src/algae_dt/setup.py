@@ -36,6 +36,7 @@ setup(
             'sync_supervisor = algae_dt.sync_supervisor:main',
             'mission_runner = algae_dt.mission_runner:main',
             'operator_gui = algae_dt.operator_gui:main',
+            'fake_robot = algae_dt.fake_robot:main',
         ],
     },
 )

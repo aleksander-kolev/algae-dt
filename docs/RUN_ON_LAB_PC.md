@@ -27,11 +27,13 @@ the lab. The script never *guesses* — it fails loudly if Docker/image/turtlebo
 ```bash
 git clone https://github.com/aleksander-kolev/algae-dt.git
 cd algae-dt
-./scripts/lab_run.sh sim_only                          # home / no robot (smoke-test)
-ROS_DOMAIN_ID=<robot#> ./scripts/lab_run.sh real_only  # lab: real robot
-ROS_DOMAIN_ID=<robot#> ./scripts/lab_run.sh both        # lab: real leads + sim mirror (after T5.1)
-# options:  --headless (gz server only, no GUI)   --rebuild (clean colcon)   TB3_IMAGE=<name> (other image)
+./scripts/lab_run.sh sim_only        # home / no robot (smoke-test)
+./scripts/lab_run.sh real_only       # lab: real robot (defaults to robot #36 @ 192.168.8.36, domain 36)
+./scripts/lab_run.sh both            # lab: real leads + sim mirror (after T5.1)
+# options:  --headless   --rebuild   TB3_IMAGE=<name>   ROS_DOMAIN_ID=<n> ROBOT_IP=<ip> (if not #36)
 ```
+Robot defaults are baked in (**#36 / 192.168.8.36 / ROS_DOMAIN_ID=36**); override with the env vars
+above if you're given a different robot. The script pings the robot and warns if it's not up yet.
 `scripts/lab_run.sh` does all of it: preflight (Docker + image + domain) → recreate `~/turtlebot3_ws/src`
 → copy the package → `docker run --net=host … turtlebot3_ws` → inside: source ROS + the turtlebot3
 overlay, `colcon build --packages-select algae_dt`, `source install/setup.bash`,
@@ -49,11 +51,11 @@ container (the script verifies this with `ros2 pkg prefix turtlebot3_gazebo` and
 
 ## 3. Robot bringup (robot Pi — native; the script prints this for real/both)
 ```bash
-ssh turtlebot@<robot-ip>
-export TURTLEBOT3_MODEL=burger LDS_MODEL=LDS-02 ROS_DOMAIN_ID=<robot#>
+ssh turtlebot@192.168.8.36
+export TURTLEBOT3_MODEL=burger LDS_MODEL=LDS-02 ROS_DOMAIN_ID=36
 ros2 launch turtlebot3_bringup robot.launch.py
 ```
-Laptop + robot on Wi-Fi `AP2IRR10`, same `ROS_DOMAIN_ID`. In RViz set **2D Pose Estimate** before Start.
+Laptop + robot on Wi-Fi `AP2IRR10`, same `ROS_DOMAIN_ID=36`. In RViz set **2D Pose Estimate** before Start.
 
 ## 4. Manual fallback (if the combined launch misbehaves — each terminal: `docker exec -it turtlebot3_container bash`)
 ```

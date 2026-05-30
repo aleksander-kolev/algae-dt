@@ -70,12 +70,15 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   echo "-> If the course image has a different name, re-run with TB3_IMAGE=<name>; else ask a TA." >&2
   exit 3
 fi
-# real/both need the robot's ROS_DOMAIN_ID (= robot number)
-if [ "$MODE" != "sim_only" ] && [ -z "${ROS_DOMAIN_ID:-}" ]; then
-  echo "FATAL: $MODE needs the robot's domain. Run:  ROS_DOMAIN_ID=<robot#> $0 $MODE" >&2; exit 2
+# This team's robot: #36 @ 192.168.8.36, ROS_DOMAIN_ID=36 (override via env if it changes).
+DOMAIN="${ROS_DOMAIN_ID:-36}"
+ROBOT_IP="${ROBOT_IP:-192.168.8.36}"
+echo "OK: docker + image '$IMAGE' present. mode=$MODE headless=$HEADLESS ROS_DOMAIN_ID=$DOMAIN robot=$ROBOT_IP"
+# real/both: warn (don't block) if the robot isn't reachable yet
+if [ "$MODE" != "sim_only" ]; then
+  if ping -c1 -W2 "$ROBOT_IP" >/dev/null 2>&1; then echo "OK: robot $ROBOT_IP reachable";
+  else echo "WARN: robot $ROBOT_IP not reachable yet — check Wi-Fi AP2IRR10 + that the Pi bringup is up"; fi
 fi
-DOMAIN="${ROS_DOMAIN_ID:-0}"
-echo "OK: docker + image '$IMAGE' present. mode=$MODE headless=$HEADLESS ROS_DOMAIN_ID=$DOMAIN"
 
 # ---- recreate the workspace you deleted, copy the package in (course "How to create Packages" §3) ----
 echo "== (re)create $WS/src/algae_dt =="
@@ -89,7 +92,7 @@ if [ "$MODE" != "sim_only" ]; then
   cat <<EOF
 
 >>> BEFORE this runs, the robot must be up (separate terminal, on the robot Pi):
-      ssh turtlebot@<robot-ip>
+      ssh turtlebot@$ROBOT_IP
       export TURTLEBOT3_MODEL=burger LDS_MODEL=LDS-02 ROS_DOMAIN_ID=$DOMAIN
       ros2 launch turtlebot3_bringup robot.launch.py
     Laptop + robot on Wi-Fi AP2IRR10, SAME ROS_DOMAIN_ID=$DOMAIN.

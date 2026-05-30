@@ -37,8 +37,8 @@ def _latched(depth: int = 1) -> QoSProfile:
 
 
 class TwinMediator(Node):
-    def __init__(self) -> None:
-        super().__init__('twin_mediator')
+    def __init__(self, **kwargs) -> None:
+        super().__init__('twin_mediator', **kwargs)
 
         # --- parameters (defaults mirror config/twin.yaml; the launch binds the file via /**) ---
         gp = self._declare
