@@ -42,13 +42,24 @@ overlay, `colcon build --packages-select algae_dt`, `source install/setup.bash`,
 **Teleop in another terminal** (the script prints the exact line): `docker exec -it turtlebot3_container …
 ros2 run turtlebot3_teleop teleop_keyboard --ros-args -r /cmd_vel:=/dt/cmd_vel_raw`.
 
-## 2. The one prerequisite to confirm on the laptop
-```bash
-command -v docker && docker images | grep turtlebot3_ws   # both must be present
-```
-If absent → ask a TA / install rootless Docker (no sudo). **On the bare host
-`ros2 pkg list | grep turtlebot3` is EXPECTED EMPTY** — turtlebot3 only resolves **inside** the
-container (the script verifies this with `ros2 pkg prefix turtlebot3_gazebo` and aborts if missing).
+## 2. Self-healing — the script trusts NOTHING on the machine
+`lab_run.sh` bootstraps whatever's missing, in order, before it runs:
+1. **Docker missing / daemon unreachable → installs rootless Docker** (official
+   `https://get.docker.com/rootless`, no sudo) and starts the daemon.
+2. **No turtlebot3 image** (`turtlebot3_ws` / `algae-dt:dev` / `algae-dt:fallback`) **→ builds one**
+   from **`scripts/Dockerfile`** (the full stock turtlebot3 + Nav2 + Gazebo stack), tagged
+   `algae-dt:fallback`.
+3. **`~/turtlebot3_ws` missing → recreates it**, copies the package, builds.
+4. Verifies turtlebot3 resolves **inside** the container (`ros2 pkg prefix turtlebot3_gazebo`) and
+   aborts loudly if not. (On the bare host `ros2 pkg list | grep turtlebot3` is EXPECTED EMPTY.)
+
+**Honest limits of the fallbacks (the script says these, never silently fails):**
+- Rootless Docker needs the **`uidmap`** tools (root to install) + **internet**; and rootless
+  `--net=host` **may not reach the robot over DDS** → for the real/both hardware demo prefer rootful
+  Docker (TA-provided); `sim_only` works fine rootless.
+- Building the fallback image needs **internet** (base pull + apt) and **~10–20 min**.
+- If neither Docker can be obtained nor an image built (fully offline, no `uidmap`) → that's a
+  genuine blocker for a TA, not something any script can conjure.
 
 ## 3. Robot bringup (robot Pi — native; the script prints this for real/both)
 ```bash
