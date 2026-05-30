@@ -27,44 +27,43 @@ the lab. The script never *guesses* — it fails loudly if Docker/image/turtlebo
 ```bash
 git clone https://github.com/aleksander-kolev/algae-dt.git
 cd algae-dt
-./scripts/lab_run.sh                  # DEFAULT = both: FULL DEMO (real leads + sim mirror), robot #36
-./scripts/lab_run.sh sim_only         # home / no robot (smoke-test)
-./scripts/lab_run.sh real_only        # real robot only (no sim mirror)
-# options:  --headless   --rebuild   TB3_IMAGE=<name>   ROS_DOMAIN_ID=<n> ROBOT_IP=<ip> (if not #36)
+./scripts/lab_run.sh                   # THE lab runner: FULL DEMO (mode:=both), or it ERRORS
+./scripts/lab_run.sh --rebuild         # clean colcon build first
+# overrides:  TB3_IMAGE=<name>   ROS_DOMAIN_ID=<n>   ROBOT_IP=<ip>   (if image/robot differ)
 ```
-No argument → **`both`**, so the whole twin (real + Gazebo mirror + GUI) comes up ready to record.
-Robot defaults are baked in (**#36 / 192.168.8.36 / ROS_DOMAIN_ID=36**); override with the env vars
-above if you're given a different robot. The script pings the robot and warns if it's not up yet.
-`scripts/lab_run.sh` does all of it: preflight (Docker + image + domain) → recreate `~/turtlebot3_ws/src`
-→ copy the package → `docker run --net=host … turtlebot3_ws` → inside: source ROS + the turtlebot3
-overlay, `colcon build --packages-select algae_dt`, `source install/setup.bash`,
-`ros2 launch algae_dt bringup.launch.py mode:=<mode>`. The GUI/RViz/Gazebo render via X11.
-**Teleop in another terminal** (the script prints the exact line): `docker exec -it turtlebot3_container …
-ros2 run turtlebot3_teleop teleop_keyboard --ros-args -r /cmd_vel:=/dt/cmd_vel_raw`.
+`lab_run.sh` does **one** thing — the full real+sim **`both`** demo — and **errors instead of running
+a half-demo** if `both` can't work. (Home / sim-only testing is a different job: `docker/run.sh` +
+`docker/sim_smoke.sh`.) It will FAIL, with guidance, on any of:
+1. **No rootful Docker** — `both` talks to the robot over DDS, which needs real `--net=host`. Rootless
+   (RootlessKit/slirp4netns) has no LAN multicast → robot unreachable → hard error (TA must enable Docker).
+2. **No turtlebot3 image and can't build one** (no internet for the `scripts/Dockerfile` build) → error.
+3. **Robot not reachable** (ping fails) or **`/scan` not visible inside the container in 40 s**
+   (Pi bringup down / wrong `ROS_DOMAIN_ID` / wrong Wi-Fi) → error; it never records on a dead link.
+Otherwise it recreates `~/turtlebot3_ws`, copies the package, builds, and launches the twin ready to record.
+Robot defaults are baked in (**#36 / 192.168.8.36 / ROS_DOMAIN_ID=36**); override with `ROS_DOMAIN_ID=`
+/ `ROBOT_IP=` if you're given a different robot. **Teleop in another terminal** (the script prints the
+exact line): `docker exec -it turtlebot3_container … ros2 run turtlebot3_teleop teleop_keyboard
+--ros-args -r /cmd_vel:=/dt/cmd_vel_raw`.
 
-## 2. Self-healing — the script trusts NOTHING on the machine
-`lab_run.sh` bootstraps whatever's missing, in order, before it runs:
-1. **Docker missing / daemon unreachable → installs rootless Docker** (official
-   `https://get.docker.com/rootless`, no sudo) and starts the daemon.
-2. **No turtlebot3 image** (`turtlebot3_ws` / `algae-dt:dev` / `algae-dt:fallback`) **→ builds one**
-   from **`scripts/Dockerfile`** (the full stock turtlebot3 + Nav2 + Gazebo stack), tagged
-   `algae-dt:fallback`.
-3. **`~/turtlebot3_ws` missing → recreates it**, copies the package, builds.
-4. Verifies turtlebot3 resolves **inside** the container (`ros2 pkg prefix turtlebot3_gazebo`) and
-   aborts loudly if not. (On the bare host `ros2 pkg list | grep turtlebot3` is EXPECTED EMPTY.)
+## 2. What it self-heals vs what it ERRORS on
+**Self-heals (these don't block `both`):**
+- **No turtlebot3 image → builds one** from `scripts/Dockerfile` (full stock turtlebot3 + Nav2 +
+  Gazebo stack), tagged `algae-dt:fallback`. (Needs internet + ~10–20 min.)
+- **`~/turtlebot3_ws` deleted → recreates it**, copies the package, `colcon build`.
+- Verifies turtlebot3 resolves **inside** the container. (On the bare host `ros2 pkg list | grep
+  turtlebot3` is EXPECTED EMPTY — the stack is in the image.)
 
-**Does the FULL worst path run the real robot? — NO, and the script FAILS instead of faking it.**
-- **Image-build fallback:** ✅ all modes (the built image has the full stock stack) — *given rootful Docker*.
-- **Rootless-Docker fallback:** ✅ `sim_only` (and `both use_fake_robot:=true`, hardware-free), but
-  ❌ **the real-robot connection.** Rootless `--net=host` attaches to RootlessKit's own namespace
-  (slirp4netns) which carries **no LAN multicast**, so ROS 2 DDS discovery to the Burger can't work.
-  → the script **hard-fails** `real_only`/`both` under rootless (pointing you to rootful Docker or the
-  fake-robot demo). The **real-robot demo requires ROOTFUL Docker** (`--net=host`, course-proven).
-- **The script PROVES the real link before launching:** in `real_only`/`both` it waits ≤40 s for
-  `/scan` *inside the container* and **exits non-zero** if the robot isn't visible (Pi bringup down /
-  wrong domain / wrong Wi-Fi / Docker networking) — it never records a demo on a dead link.
-- Rootless install needs **`uidmap`** (root) + internet; the fallback image build needs internet + ~10–20 min.
-- Fully offline + no `uidmap`, or rootless-only on a real-robot demo → genuine TA blocker; the script says so.
+**ERRORS — `both` 100% cannot run, so the script stops (never a half-demo):**
+- **No rootful Docker.** `both` reaches the robot over DDS via real `--net=host`; **rootless**
+  `--net=host` is RootlessKit/slirp4netns with **no LAN multicast** → robot unreachable. No-sudo can't
+  install rootful → TA must enable Docker. (The script detects rootless and fails too.)
+- **No image + no internet** to build one → error.
+- **Robot unreachable** (ping) **or `/scan` not visible inside the container in 40 s** (Pi bringup
+  down / wrong `ROS_DOMAIN_ID` / wrong Wi-Fi) → error; it never records on a dead link.
+
+(For a hardware-free twin at home use `ros2 launch algae_dt bringup.launch.py mode:=both
+use_fake_robot:=true`; sim-only smoke-test = `docker/run.sh` + `docker/sim_smoke.sh`. Those are not
+this lab runner's job.)
 
 ## 3. Robot bringup (robot Pi — native; the script prints this for real/both)
 ```bash
