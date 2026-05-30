@@ -5,11 +5,11 @@
 # fresh `git clone`. Recreates the ~/turtlebot3_ws workspace (which was deleted).
 #
 # Usage (run it from anywhere inside the cloned repo):
-#   ./scripts/lab_run.sh sim_only                       # no robot (home / smoke-test)
-#   ROS_DOMAIN_ID=36 ./scripts/lab_run.sh real_only     # real robot only
-#   ROS_DOMAIN_ID=36 ./scripts/lab_run.sh both           # real leads, sim mirrors
-#   ./scripts/lab_run.sh sim_only --headless --rebuild   # gz server only / clean build
-#   TB3_IMAGE=my_image ./scripts/lab_run.sh real_only    # if the course image has another name
+#   ./scripts/lab_run.sh                 # DEFAULT = both (FULL DEMO: real leads + sim mirror, robot #36)
+#   ./scripts/lab_run.sh sim_only        # no robot (home / smoke-test)
+#   ./scripts/lab_run.sh real_only       # real robot only (no sim mirror)
+#   ./scripts/lab_run.sh both --rebuild  # clean colcon build
+#   TB3_IMAGE=my_image ./scripts/lab_run.sh   # if the course image has another name
 #
 # WHERE EACH STEP COMES FROM (see docs/RUN_ON_LAB_PC.md §Provenance for the exact citation):
 #  - the `docker run --net=host … -v <home>/turtlebot3_ws:/ws … turtlebot3_ws bash` invocation
@@ -30,7 +30,7 @@
 set -euo pipefail
 
 # ---- args ----
-MODE="${1:-real_only}"; shift || true
+MODE="${1:-both}"; shift || true     # default = both (full real+sim demo, ready to record)
 HEADLESS=false; REBUILD=false
 for a in "$@"; do
   case "$a" in

@@ -27,11 +27,12 @@ the lab. The script never *guesses* — it fails loudly if Docker/image/turtlebo
 ```bash
 git clone https://github.com/aleksander-kolev/algae-dt.git
 cd algae-dt
-./scripts/lab_run.sh sim_only        # home / no robot (smoke-test)
-./scripts/lab_run.sh real_only       # lab: real robot (defaults to robot #36 @ 192.168.8.36, domain 36)
-./scripts/lab_run.sh both            # lab: real leads + sim mirror (after T5.1)
+./scripts/lab_run.sh                  # DEFAULT = both: FULL DEMO (real leads + sim mirror), robot #36
+./scripts/lab_run.sh sim_only         # home / no robot (smoke-test)
+./scripts/lab_run.sh real_only        # real robot only (no sim mirror)
 # options:  --headless   --rebuild   TB3_IMAGE=<name>   ROS_DOMAIN_ID=<n> ROBOT_IP=<ip> (if not #36)
 ```
+No argument → **`both`**, so the whole twin (real + Gazebo mirror + GUI) comes up ready to record.
 Robot defaults are baked in (**#36 / 192.168.8.36 / ROS_DOMAIN_ID=36**); override with the env vars
 above if you're given a different robot. The script pings the robot and warns if it's not up yet.
 `scripts/lab_run.sh` does all of it: preflight (Docker + image + domain) → recreate `~/turtlebot3_ws/src`
