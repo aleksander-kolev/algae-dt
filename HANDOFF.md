@@ -18,14 +18,25 @@ The three criteria → our deliverables:
 - **③ Environmental** — 25 cm dual-LiDAR stop mirrored on BOTH robots + Nav2 dynamic-obstacle avoidance
   + navigate-and-spray; **introduce a live environment change** in the demo.
 
-## State: DONE vs NOT DONE  (as of commit on `main`)
-**DONE:** all planning/decision docs; course-faithful **buildable scaffold** (`ros2_ws/src/algae_dt/`:
-`package.xml`, `setup.py` w/ 4 entry points, `config/twin.yaml` tunables, `launch/bringup.launch.py`,
-`worlds/algae_arena.world`, `maps/map.{pgm,yaml}`, `test/test_import.py`); pure libs `geometry.py` +
-`metrics.py` (implemented, tested) ; submission package + demo script.
-**NOT DONE (your job):** the four nodes are **STUBS** (log "STUB … implement per PLAN") and pure libs
-`safety.py / blooms.py / sync.py / pgm.py` are **stubs raising NotImplementedError**. No node logic,
-no `both`-mode sim namespacing, no video. → Execute `docs/PLAN.md` Phases 1→6.
+## State: DONE vs NOT DONE  (as of commit on `main`; repo: github.com/aleksander-kolev/algae-dt)
+**DONE:** all docs; **7 pure libs implemented + TDD** (safety/blooms/sync/metrics/geometry/pgm/hud —
+**82 tests pass**); **4 nodes implemented** (twin_mediator, sync_supervisor, mission_runner,
+operator_gui); **`bringup.launch.py` fully wired** (gz sim into our world + Nav2 via `RewrittenYaml`
++ DT nodes); Docker dev image (`docker/Dockerfile`); submission package + demo script.
+**NOT DONE / AT RISK (your job) — the integrated launch has NEVER run in ROS/Gazebo; only unit tests
+pass.** Before trusting it (see `docs/RUN_ON_LAB_PC.md` §0 readiness):
+1. **Smoke-test `mode:=sim_only` in the turtlebot3_ws container** (`colcon build` + launch + `ros2 topic hz /scan`).
+2. **gz↔ROS bridge:** the launch starts `gz_sim`+spawn but no explicit `ros_gz parameter_bridge` —
+   confirm `/scan`,`/odom`,`/cmd_vel`,`/clock` reach ROS; if not, add a bridge (or use turtlebot3_gazebo's
+   world launch which bundles it).
+3. **`both`-mode `/sim/*` namespacing (PLAN T5.1):** the mediator expects the mirror sim on
+   `/sim/scan`,`/sim/odom` and publishes `/sim/cmd_vel`, but the launch spawns the sim on BARE topics →
+   collides with the real robot. Namespace/remap the sim before `both` works.
+4. Verify the Nav2 `RewrittenYaml` keys exist in turtlebot3_navigation2 `param/burger.yaml`
+   (`collision_monitor.cmd_vel_out_topic`, `set_initial_pose`).
+5. Record the demo video (`docs/DEMO_SCRIPT.md`).
+Then finish any remaining `docs/PLAN.md` items. `real_only` and `sim_only` are closest to working;
+`both` needs item 3.
 
 ## Implementation order (do NOT skip TDD)
 Follow `docs/PLAN.md`. **Start with Phase 1:**
@@ -71,6 +82,7 @@ green build + a run.** Build/test recipe: `docs/SETUP.md` §1 (container) or §2
 | `docs/BEST_APPROACHES.md` | Patterns, lessons, gotchas, + Context7 API verification. |
 | `docs/RUBRIC_MAP.md` | Official rubric → deliverable → evidence → demo (Redlining targets). |
 | `docs/SCENARIOS_SIM.md` / `docs/SCENARIOS_LAB.md` | Run scenarios (flow + edge cases). |
+| `docs/RUN_ON_LAB_PC.md` | Pull-from-GitHub → build → run on the lab laptop (+ readiness verdict). |
 | `docs/CONTEXT_DIAGRAM.md` | System boundary + topic flows. |
 | `docs/SUBMISSION.md` / `docs/DEMO_SCRIPT.md` | Zip/checklist/credentials + 2–3 min video script. |
 | `docs/COURSE_COVERAGE.md` | Every course artifact → where used. |
