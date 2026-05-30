@@ -138,6 +138,40 @@ def test_estop_latches_and_stops(world):
     assert ok, "E-STOP must latch and full-stop the output"
 
 
+def test_sim_pose_published_in_map_frame_via_tf(world):
+    # Root-cause fix: the mediator lifts the odom pose into the MAP frame via map<-odom (AMCL),
+    # so the GUI overlays the robot where RViz shows it. With map<-odom = (1,2,90deg) and the
+    # harness odom pose (1,0,0), /dt/sim_pose must be the composed map pose (1,3,90deg).
+    import math
+
+    from geometry_msgs.msg import TransformStamped
+    from tf2_ros import StaticTransformBroadcaster
+
+    from algae_dt.lib.geometry import quaternion_from_yaw
+
+    har, ex = world
+    bc = rclpy.create_node('tf_map_odom_bc')
+    stb = StaticTransformBroadcaster(bc)
+    tf = TransformStamped()
+    tf.header.frame_id = 'map'
+    tf.child_frame_id = 'odom'
+    tf.transform.translation.x = 1.0
+    tf.transform.translation.y = 2.0
+    tf.transform.rotation.z, tf.transform.rotation.w = quaternion_from_yaw(math.pi / 2)
+    stb.sendTransform(tf)
+    ex.add_node(bc)
+    try:
+        ok = _spin_until(ex, lambda: har.last_sim_pose is not None
+                         and har.last_sim_pose.header.frame_id == 'map'
+                         and har.last_sim_pose.pose.position.y > 2.5, secs=8.0)
+        assert ok, "/dt/sim_pose should be in the map frame, composed via map<-odom"
+        assert abs(har.last_sim_pose.pose.position.x - 1.0) < 0.15
+        assert abs(har.last_sim_pose.pose.position.y - 3.0) < 0.15
+    finally:
+        ex.remove_node(bc)
+        bc.destroy_node()
+
+
 def test_latched_mode_and_sim_pose_and_health(world):
     har, ex = world
     ok = _spin_until(ex, lambda: har.last_mode == 'sim_only'

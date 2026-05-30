@@ -234,10 +234,13 @@ def _make_window(bridge: GuiBridge):
             import math
             x, y, yaw = pose
             c = self.world_to_screen(x, y)
+            # Heading tip computed in WORLD metres then mapped through world_to_screen, so the
+            # screen y-flip is handled consistently (raw screen-trig would mirror the arrow).
+            tip = self.world_to_screen(x + 0.3 * math.cos(yaw), y + 0.3 * math.sin(yaw))
             qp.setBrush(color)
             qp.setPen(QtGui.QPen(color, 2))
             qp.drawEllipse(c, 6, 6)
-            qp.drawLine(c, QtCore.QPointF(c.x() + 14 * math.cos(yaw), c.y() + 14 * math.sin(yaw)))
+            qp.drawLine(c, tip)
 
     class OperatorWindow(QtWidgets.QWidget):
         def __init__(self, bridge):

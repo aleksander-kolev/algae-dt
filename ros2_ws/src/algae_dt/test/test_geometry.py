@@ -32,3 +32,30 @@ def test_world_to_pixel_row_is_flipped():
 
 def test_euclidean():
     assert math.isclose(g.euclidean(0.0, 0.0, 3.0, 4.0), 5.0)
+
+
+def test_compose_pose_2d_identity():
+    assert g.compose_pose_2d((0.0, 0.0, 0.0), (1.0, 2.0, 0.5)) == (1.0, 2.0, 0.5)
+
+
+def test_compose_pose_2d_translation_only():
+    assert g.compose_pose_2d((1.0, 1.0, 0.0), (2.0, 3.0, 0.0)) == (3.0, 4.0, 0.0)
+
+
+def test_compose_pose_2d_rotation():
+    # parent rotated +90deg: a child at (1,0) in the child frame lands at (0,1) in the parent.
+    x, y, yaw = g.compose_pose_2d((0.0, 0.0, math.pi / 2), (1.0, 0.0, 0.0))
+    assert math.isclose(x, 0.0, abs_tol=1e-9) and math.isclose(y, 1.0)
+    assert math.isclose(yaw, math.pi / 2)
+
+
+def test_compose_pose_2d_matches_amcl_case():
+    # map->odom = (-1.69,-1.05, 64.1deg); odom pose (-0.26,-2.26, ?) -> map pose near amcl (0.15,-2.31)
+    mx, my, _ = g.compose_pose_2d((-1.690, -1.051, 1.119), (-0.261, -2.260, 0.0))
+    assert abs(mx - 0.15) < 0.2 and abs(my - (-2.31)) < 0.2
+
+
+def test_compose_pose_2d_wraps_yaw():
+    _, _, yaw = g.compose_pose_2d((0.0, 0.0, math.pi - 0.1), (0.0, 0.0, 0.2))
+    assert -math.pi < yaw <= math.pi
+    assert math.isclose(yaw, -(math.pi - 0.1), abs_tol=1e-9)

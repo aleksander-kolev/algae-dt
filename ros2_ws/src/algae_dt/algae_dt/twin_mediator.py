@@ -22,8 +22,10 @@ from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import (DurabilityPolicy, QoSProfile, ReliabilityPolicy,
                        qos_profile_sensor_data)
+from rclpy.time import Time as RclpyTime
 from sensor_msgs.msg import BatteryState, LaserScan
 from std_msgs.msg import Bool, String
+from tf2_ros import Buffer, TransformListener
 
 from algae_dt.lib import geometry, safety, sync
 
@@ -73,8 +75,10 @@ class TwinMediator(Node):
         self._estop_manual = False
         self._estop_battery = False
         self._estop_latched = False
-        self._shadow = (0.0, 0.0, 0.0)        # commanded shadow pose (sim_only /dt/real_pose)
+        self._shadow = (0.0, 0.0, 0.0)        # commanded shadow pose (sim_only /dt/real_pose), MAP frame
         self._shadow_t: float | None = None
+        self._shadow_anchored = False         # shadow is anchored to the robot's first map pose
+        self._T_map_odom = (0.0, 0.0, 0.0)    # map<-odom from AMCL/TF (identity until localized)
         self._start_t = self._now()
 
         # --- publishers ---
@@ -99,9 +103,14 @@ class TwinMediator(Node):
             self.create_subscription(LaserScan, '/sim/scan', self._on_sim_scan, qos_profile_sensor_data)
             self.create_subscription(Odometry, '/sim/odom', self._on_sim_odom, 10)
 
+        # --- TF: map<-odom (AMCL) so /dt/*_pose are published in the MAP frame the GUI overlays on ---
+        self._tf_buffer = Buffer()
+        self._tf_listener = TransformListener(self._tf_buffer, self)
+
         # --- timers ---
         self.create_timer(1.0 / self.cmd_rate_hz, self._on_cmd_timer)
         self.create_timer(1.0 / self.health_rate_hz, self._on_health_timer)
+        self.create_timer(0.2, self._refresh_map_odom)   # AMCL map<-odom updates slowly
 
         # latched initial state
         self.pub_mode.publish(String(data=self.mode))
@@ -121,6 +130,28 @@ class TwinMediator(Node):
     def _stamp(self):
         return self.get_clock().now().to_msg()
 
+    def _refresh_map_odom(self) -> None:
+        """Cache the latest map<-odom (AMCL). Kept identity until localized / if no TF (e.g. tests)."""
+        try:
+            t = self._tf_buffer.lookup_transform('map', 'odom', RclpyTime())
+            tr, rot = t.transform.translation, t.transform.rotation
+            self._T_map_odom = (tr.x, tr.y, geometry.yaw_from_quaternion(rot.z, rot.w))
+        except Exception:
+            pass
+
+    @staticmethod
+    def _pose_xyyaw(p):
+        o = p.orientation
+        return (p.position.x, p.position.y, geometry.yaw_from_quaternion(o.z, o.w))
+
+    def _map_posestamped(self, xyyaw) -> PoseStamped:
+        ps = PoseStamped()
+        ps.header.stamp = self._stamp()
+        ps.header.frame_id = 'map'
+        ps.pose.position.x, ps.pose.position.y = float(xyyaw[0]), float(xyyaw[1])
+        ps.pose.orientation.z, ps.pose.orientation.w = geometry.quaternion_from_yaw(xyyaw[2])
+        return ps
+
     # -------------------------------------------------------------- callbacks
     def _on_cmd(self, msg: TwistStamped) -> None:
         self._last_cmd = msg
@@ -136,10 +167,16 @@ class TwinMediator(Node):
         self._sim_scan_t = self._now()
 
     def _on_odom(self, msg: Odometry) -> None:
-        self.pub_odom_active.publish(msg)
-        pose = PoseStamped(header=msg.header, pose=msg.pose.pose)
+        self.pub_odom_active.publish(msg)                     # raw odom frame (sync/latency uses it)
+        # Lift the odom pose into the MAP frame via map<-odom (AMCL) so the GUI overlays it on the
+        # map exactly where RViz shows the robot. Identity until AMCL localizes (then == odom frame).
+        map_xyyaw = geometry.compose_pose_2d(self._T_map_odom, self._pose_xyyaw(msg.pose.pose))
+        ps = self._map_posestamped(map_xyyaw)
         # In sim_only the bare /odom is the SIM's; otherwise it is the REAL robot's.
-        (self.pub_sim_pose if self._sim_is_bare else self.pub_real_pose).publish(pose)
+        (self.pub_sim_pose if self._sim_is_bare else self.pub_real_pose).publish(ps)
+        if self._sim_is_bare and not self._shadow_anchored:   # anchor the commanded shadow to the start
+            self._shadow = map_xyyaw
+            self._shadow_anchored = True
 
     def _on_sim_odom(self, msg: Odometry) -> None:
         self.pub_sim_pose.publish(PoseStamped(header=msg.header, pose=msg.pose.pose))
@@ -211,9 +248,10 @@ class TwinMediator(Node):
         self._integrate_shadow(vx, wz, now)
 
     def _integrate_shadow(self, vx: float, wz: float, now: float) -> None:
-        """Commanded shadow pose for sim_only: integrate the safe command and publish it as the
-        'real' reference (/dt/real_pose) the sync_supervisor compares to the achieved sim pose."""
-        if self.mode != 'sim_only':
+        """Commanded shadow pose for sim_only: anchored to the robot's first MAP pose, then integrate
+        the safe command. Published as the 'real' reference (/dt/real_pose, MAP frame) the
+        sync_supervisor compares to the achieved sim pose — and the GUI overlays on the map."""
+        if self.mode != 'sim_only' or not self._shadow_anchored:
             return
         if self._shadow_t is None:
             self._shadow_t = now
@@ -222,15 +260,8 @@ class TwinMediator(Node):
         self._shadow_t = now
         if dt <= 0.0:
             return
-        x, y, yaw = sync.integrate_unicycle(*self._shadow, vx, wz, dt)
-        self._shadow = (x, y, yaw)
-        ps = PoseStamped()
-        ps.header.stamp = self._stamp()
-        ps.header.frame_id = 'odom'
-        ps.pose.position.x = x
-        ps.pose.position.y = y
-        ps.pose.orientation.z, ps.pose.orientation.w = geometry.quaternion_from_yaw(yaw)
-        self.pub_real_pose.publish(ps)
+        self._shadow = sync.integrate_unicycle(*self._shadow, vx, wz, dt)
+        self.pub_real_pose.publish(self._map_posestamped(self._shadow))
 
     # --------------------------------------------------------------- battery
     def _on_health_timer(self) -> None:

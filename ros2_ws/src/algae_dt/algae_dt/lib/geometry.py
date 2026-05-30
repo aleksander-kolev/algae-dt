@@ -46,6 +46,22 @@ def quaternion_from_yaw(yaw: float) -> tuple[float, float]:
     return math.sin(yaw / 2.0), math.cos(yaw / 2.0)
 
 
+def compose_pose_2d(a: tuple[float, float, float],
+                    b: tuple[float, float, float]) -> tuple[float, float, float]:
+    """Compose two planar poses a∘b: express pose b (given in a's child frame) in a's parent frame.
+
+    Used to put an odom-frame robot pose into the map frame: compose_pose_2d(map_T_odom, odom_pose).
+    Returns (x, y, yaw) with yaw wrapped to (-pi, pi].
+    """
+    ax, ay, ayaw = a
+    bx, by, byaw = b
+    ca, sa = math.cos(ayaw), math.sin(ayaw)
+    x = ax + bx * ca - by * sa
+    y = ay + bx * sa + by * ca
+    yaw = (ayaw + byaw + math.pi) % (2.0 * math.pi) - math.pi
+    return x, y, yaw
+
+
 def angle_diff(a: float, b: float) -> float:
     """Smallest signed difference a-b wrapped to (-pi, pi]."""
     d = (a - b + math.pi) % (2.0 * math.pi) - math.pi
