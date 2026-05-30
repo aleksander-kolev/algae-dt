@@ -63,10 +63,6 @@ def launch_setup(context, *args, **kwargs):
         SetEnvironmentVariable('GZ_SIM_RESOURCE_PATH',
                                _src('turtlebot3_gazebo', 'models') + os.pathsep + os.path.join(pkg, 'worlds')),
     ]
-    if headless:
-        # turtlebot3_navigation2 launches its own RViz unconditionally; offscreen keeps it from
-        # crashing on a display-less CI host (it renders to nothing instead of aborting).
-        actions.append(SetEnvironmentVariable('QT_QPA_PLATFORM', 'offscreen'))
 
     # ---- stock Gazebo sim into OUR arena world (sim_only/both) — PLAN T1.1 ----
     if sim:
@@ -92,11 +88,14 @@ def launch_setup(context, *args, **kwargs):
                 'use_sim_time': use_sim_time_str,
             },
             convert_types=True)
+        # Include nav2_bringup DIRECTLY (not turtlebot3_navigation2's wrapper, which force-launches
+        # an RViz that aborts on a display-less host) so RViz is ours to gate on use_rviz.
         actions.append(IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(_src('turtlebot3_navigation2', 'launch', 'navigation2.launch.py')),
+            PythonLaunchDescriptionSource(_src('nav2_bringup', 'launch', 'bringup_launch.py')),
             launch_arguments={'use_sim_time': use_sim_time_str,
                               'map': map_yaml,
-                              'params_file': nav2_params}.items()))
+                              'params_file': nav2_params,
+                              'autostart': 'true'}.items()))
 
     # ---- our DT layer (all modes); params bind via the /** wildcard in twin.yaml ----
     common = [params, {'use_sim_time': use_sim_time, 'mode': mode}]
@@ -109,8 +108,10 @@ def launch_setup(context, *args, **kwargs):
     ]
     if not headless:
         actions.append(Node(package='algae_dt', executable='operator_gui', output='screen', parameters=common))
-    if use_rviz:
-        actions.append(Node(package='rviz2', executable='rviz2', output='screen'))
+    if use_rviz and nav:
+        rviz_cfg = _src('turtlebot3_navigation2', 'rviz', 'tb3_navigation2.rviz')
+        actions.append(Node(package='rviz2', executable='rviz2', arguments=['-d', rviz_cfg],
+                            parameters=[{'use_sim_time': use_sim_time}], output='screen'))
     return actions
 
 
