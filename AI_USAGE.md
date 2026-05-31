@@ -53,14 +53,17 @@ technical solution, the PoC requirements, and the code are the team's own.
 
 - **Tool:** Claude Code (Anthropic), Claude Opus model.
 - **Role:** the team's coding copilot / assistant — it helped implement the team's design and helped
-  with debugging and packaging.
+  with debugging, packaging, and documentation, always under the team's direction.
 
 ## Prompt log
 
 Development was iterative across many sessions. The prompts below are **representative** of the
 team's own design specifications and instructions to the assistant (grouped by area) — they show the
 architecture and component designs the team produced and then had the assistant implement. The final
-section summarises the packaging and documentation help the team asked the assistant for.
+section gives the team's instructions for packaging this public repository and writing its
+documentation, including the constraints the team placed on this declaration. At the team's request,
+the assistant compiled this declaration — including this prompt log — by reviewing its own session
+logs and chat history; the team then reviewed, edited, and approved it.
 
 ### 1. Domain and concepts
 - "Explain what a digital twin is for a TurtleBot3, and what 'bidirectional' state synchronisation
@@ -148,14 +151,34 @@ section summarises the packaging and documentation help the team asked the assis
   metres and map it through the same transform."
 - "Gazebo's 3D client crashes on WSL (OGRE2 on the d3d12 GL); add a `gz_gui:=false` server-only
   option so the LiDAR still renders."
+- "Review the mission runner's spray loop: a bloom is being marked treated even when the spin does
+  not complete the full revolutions. Make the accounting honest — only mark treated when the full
+  count is actually reached, treat a stalled spin as skipped, and use a wall-clock backstop so a slow
+  simulation clock cannot cut the spin short."
+- "In `both` mode the real-vs-sim pose discrepancy looks off; make sure the mirrored sim pose is
+  published in the same map frame as the real robot's pose so the measured sync error is meaningful."
 
 ### 7. Repository packaging and documentation
-For the submission, the team had the assistant help assemble a clean, runnable copy of the
-repository and draft its documentation, all reviewed and approved by the team:
-- Select the files needed to build and run the project — the `algae_dt` package together with its
-  map, config, launch files, and Gazebo worlds — so the copy builds and runs in both the simulation
-  and the real-robot modes, with the code left functionally unchanged.
-- Write clear, readable code comments.
-- Draft the `README.md` (how to run the simulation on WSL2 + Docker and on the lab laptop, and an
-  overview of the project structure and what each part does) and this AI-usage and authorship
-  declaration.
+The team directed the packaging of this public submission and the writing of its documentation, then
+reviewed, edited, and approved the result. Representative instructions:
+- "Assemble a clean, runnable copy of the repository containing only what is needed to build and run
+  the project — the `algae_dt` package with its map, config, launch files, and Gazebo worlds — so it
+  runs in both the simulation and the real-robot modes. Keep the code functionally identical to our
+  working tree; only comments and docstrings may differ, and they should be clear, concise, and
+  readable."
+- "Write the `README.md`: how to build and run the simulation on WSL2 + Docker (for the rest of the
+  team) and on the real lab laptop, the three run modes, the repository layout, the command/topic
+  flow through the safety gate, the configuration file, and a short troubleshooting section — an
+  overview of what each part does and how to run it."
+- "Write an AI-usage and authorship declaration with a prompt log, for transparency in line with the
+  course's guidelines on the use of generative AI. Constraints on how it must read:
+    - It must make clear that the team produced all the requirements and designed and architected the
+      entire system — every component, what it does, how it behaves, and how the pieces fit together —
+      and that the AI acted only as a coding copilot: it implemented the team's design at the low
+      level, explained domain concepts, helped debug, and helped package and document, always under
+      the team's direction, and it did not design, decide, or own the solution.
+    - It must be honest and transparent — state plainly what the AI was used for and what the team did
+      itself, without overstating or understating either side; and it should note that, to compile
+      this declaration, the assistant was asked to review its own session logs and chat history.
+    - It ships in the public submission repository, and the team reviews, edits, and approves its
+      final wording."
