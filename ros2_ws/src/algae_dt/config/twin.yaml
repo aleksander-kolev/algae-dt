@@ -1,0 +1,109 @@
+# Shared parameters for all algae_dt nodes (loaded by bringup.launch.py via the /** wildcard).
+# Tunables live here so nodes never hardcode them. Each value notes where it comes from and why
+# this magnitude is reasonable for the twin. Map dims match the maps/map.pgm header.
+/**:
+  ros__parameters:
+    # --- mode (overridden by the launch arg) ---
+    mode: sim_only                 # sim_only | real_only | both
+
+    # --- command bus type contract (Jazzy) ---
+    # /dt/cmd_vel_raw is geometry_msgs/TwistStamped: on Jazzy the real turtlebot3_node subscribes
+    # TwistStamped (enable_stamped_cmd_vel:true in burger.yaml) and turtlebot3_teleop publishes
+    # TwistStamped. Nav2 on Jazzy defaults to plain Twist, so a Nav2 params_file sets
+    # enable_stamped_cmd_vel:true on controller/behavior/velocity_smoother AND we remap its cmd_vel
+    # onto /dt/cmd_vel_raw in the launch. Mediator forwards TwistStamped -> real /cmd_vel + verified
+    # type -> /sim/cmd_vel.
+
+    # --- safety / motion (25 cm dual-LiDAR stop) ---
+    stop_distance_m: 0.25          # stop distance; comfortably above the LDS-02 0.12 m minimum,
+                                   # plus a footprint margin.
+    front_sector_rad: 0.70         # full cone width treated as "ahead" (= +/-0.35 rad half-angle).
+                                   # safety.front_min_range treats this as full-width.
+    max_linear_mps: 0.22           # Burger hardware max forward speed; the mediator clamps Nav2's
+                                   # planned max_speed_xy (0.3) down to this real limit.
+    max_angular_radps: 2.84        # mediator's final angular clamp = the Burger hardware max. Nav2's
+                                   # controller plans at max_vel_theta=1.0 (well within this), so nav
+                                   # never diverges; the higher ceiling just lets the in-place spray
+                                   # spin briskly under a low sim real-time-factor. The mediator only
+                                   # ever reduces angular for the gate; forward speed stays capped by
+                                   # max_linear_mps.
+    scan_range_min_m: 0.12         # LDS-02 min range
+    scan_range_max_m: 3.5          # LDS-02 max range
+
+    # --- rates ---
+    cmd_rate_hz: 20.0
+    sync_rate_hz: 5.0
+    health_rate_hz: 1.0
+
+    # --- staleness windows (fail-safe: a stale considered-scan => blocked) ---
+    max_cmd_age_s: 0.5
+    max_data_age_s: 1.0
+
+    # --- state sync & tolerances (documented thresholds + alerts) ---
+    tol_pose_xy_m: 0.15           # real-vs-sim XY tolerance; about the AMCL/odom noise floor on the
+                                  # LDS-02 plus a 0.05 m map cell. Tighter would alert on jitter.
+    tol_pose_yaw_rad: 0.26        # ~15 deg; covers heading noise during the in-place spin + AMCL spread.
+    tol_sensor_range_m: 0.20      # real-vs-sim front-range discrepancy (sim vs LDS-02 noise).
+    latency_budget_ms: 250.0      # command->motion + scan-age budget; a 20 Hz loop (50 ms) plus
+                                  # DDS/Wi-Fi latency. Above 250 ms means a real desync to flag.
+    stop_skew_ms: 300.0           # max real-stop vs sim-stop time skew on a safety event
+                                  # (measured, logged to CSV, and alerted).
+    sync_pose_timeout_s: 2.0      # if either world's pose stream is silent/stale this long, the
+                                  # supervisor fails loud (sync_ok False + /dt/alerts) instead of going dark.
+    sync_log_csv: "sync_metrics"  # CSV prefix; sync_supervisor appends <prefix>_<stamp>.csv
+    sync_log_enable: true
+    # command->motion latency: mediator stamps each /dt/cmd_vel_raw it forwards; sync_supervisor
+    # marks motion onset when |odom.twist.linear|>motion_eps_mps OR |angular|>motion_eps_radps, and
+    # reports t_motion - t_cmd (clock per mode: sim time in sim_only).
+    motion_eps_mps: 0.02
+    motion_eps_radps: 0.05
+    # sim_only sync source: with no real robot, the "shadow real pose" is the commanded pose
+    # integrated from /dt/cmd_vel_raw; sync error = commanded-vs-achieved sim pose. (Same idea as
+    # the synthetic battery below.)
+    sim_only_sync_source: commanded   # commanded => mediator publishes the integrated-command shadow
+                                      # as /dt/real_pose (the sim_only sync source); none => no shadow.
+
+    # --- battery (non-motion state sync) ---
+    battery_low_v: 11.0            # GUI battery banner turns amber below this.
+    battery_critical_v: 10.5       # real battery below this => auto E-STOP on /dt/estop (mediator).
+    battery_empty_v: 9.0           # LiPo 0% reference for the GUI gauge (lib.hud.battery_percentage).
+    battery_full_v: 12.6           # LiPo 100% reference (3S full charge); single source of truth.
+    # synthetic battery for sim_only (so battery state-sync is demonstrable without a robot);
+    # owned by twin_mediator (publishes /dt/health from this when mode==sim_only):
+    battery_sim_start_v: 12.5
+    battery_sim_drain_vps: 0.02
+    battery_sim_min_v: 11.2        # stays green; demo only
+
+    # --- mission / spray ---
+    spray_revolutions: 3.0         # spraying = this many full in-place spins at the bloom centre.
+                                   # Duration = revs*2*pi/omega, so at spray_omega_radps below it is
+                                   # ~18.8 s; raise omega to spray faster.
+    spray_omega_radps: 2.8         # in-place spin rate during spray (just under the 2.84 clamp). High
+                                   # on purpose: under a throttled sim real-time-factor (~0.5) the
+                                   # wall-clock spin rate is omega*RTF, so omega=1.0 looked like a slow
+                                   # drift (~0.5 rad/s real). 2.8 -> ~1.4 rad/s real = a brisk, visible
+                                   # spin; the closed loop still guarantees exactly spray_revolutions turns.
+    spray_time_margin: 2.0         # spray is closed-loop on odom yaw (spins until the robot has truly
+                                   # turned spray_revolutions*360, not a fixed time, so a slow sim still
+                                   # finishes the full count). Backstop = this x the nominal spin time,
+                                   # so a stalled odom can't spin forever.
+    bloom_radius_m: 0.15           # drawn marker radius + mission bookkeeping (operator_gui/mission)
+    center_tol_m: 0.50             # gross arrival sanity bound (sim_only only); Nav2 xy_goal_tolerance
+                                   # (0.15) is authoritative. Generous so deceleration pose-lag never
+                                   # false-rejects a real arrival. Also the max distance mission_runner
+                                   # will project a goal off a wall (a bloom needing a bigger move is
+                                   # treated as unreachable and skipped, not chased into the inflation).
+    goal_clearance_m: 0.30         # mission_runner projects each bloom goal to the nearest point with
+                                   # >= this clearance to any wall (static map), so Nav2 never gets a
+                                   # goal inside the costmap inflation/lethal zone (the "bloom near a
+                                   # wall -> robot starts then does nothing" fix). Footprint 0.105 m +
+                                   # margin > the 0.25 m gate, so the approach pose is reachable and
+                                   # clear of the forward-stop gate.
+    nav_goal_timeout_s: 60.0
+
+    # --- map (86x110 @ 0.05 m/px) ---
+    map_resolution: 0.05
+    map_origin_x: -2.051
+    map_origin_y: -4.194
+    map_width_px: 86
+    map_height_px: 110

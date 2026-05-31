@@ -1,0 +1,26 @@
+# ROS 2 / colcon
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+*Zone.Identifier
+
+# Runtime artifacts (sync logs are generated at run time)
+*.log
+sync_metrics_*.csv
+.ros/
+
+# Secrets / large media
+CREDENTIALS.txt
+*.mp4

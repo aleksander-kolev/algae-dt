@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>algae_dt</name>
+  <version>0.1.0</version>
+  <description>
+    Custom digital-twin package for a TurtleBot3 Burger algae-bloom cleaner (TU/e 2IRR10).
+    Thin digital-twin layer (mediator, sync supervisor, mission runner, operator GUI) on top of
+    the stock turtlebot3 packages (turtlebot3_gazebo, turtlebot3_navigation2, turtlebot3_bringup,
+    turtlebot3_teleop). Those packages are provided by the environment and launched at runtime,
+    so they are intentionally not declared as build/exec deps here.
+  </description>
+  <maintainer email="team36@student.tue.nl">algae-dt team</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <!-- launching (course my_tb3_world deps) -->
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <!-- our nodes -->
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
+  <exec_depend>nav2_simple_commander</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>
+  <exec_depend>diagnostic_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>python3-pyqt5</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

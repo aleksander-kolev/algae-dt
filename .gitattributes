@@ -1,0 +1,18 @@
+# This repo runs on Linux (ROS 2 Jazzy). Default every text file to LF so shell scripts and
+# Python launched inside the container/lab laptop never carry CRLF (which breaks `bash` shebangs
+# and `ros2 launch`). Windows-only helpers keep CRLF; binary assets are never EOL-converted.
+* text=auto eol=lf
+
+# Windows-only helper scripts.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary assets — must never be line-ending converted (would corrupt them).
+*.pgm binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.mp4 binary
+*.pdf binary
+*.zip binary
