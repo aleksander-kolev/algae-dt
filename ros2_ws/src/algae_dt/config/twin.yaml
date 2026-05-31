@@ -52,7 +52,7 @@
                                   # supervisor fails loud (sync_ok False + /dt/alerts) instead of going dark.
     sync_log_csv: "sync_metrics"  # CSV prefix; sync_supervisor appends <prefix>_<stamp>.csv
     sync_log_enable: true
-    # command->motion latency: mediator stamps each /dt/cmd_vel_raw it forwards; sync_supervisor
+    # command->motion latency: the mediator stamps every gated /cmd_vel it emits; sync_supervisor
     # marks motion onset when |odom.twist.linear|>motion_eps_mps OR |angular|>motion_eps_radps, and
     # reports t_motion - t_cmd (clock per mode: sim time in sim_only).
     motion_eps_mps: 0.02

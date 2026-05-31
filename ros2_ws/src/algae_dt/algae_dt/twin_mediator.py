@@ -184,7 +184,13 @@ class TwinMediator(Node):
             self._shadow_anchored = True
 
     def _on_sim_odom(self, msg: Odometry) -> None:
-        self.pub_sim_pose.publish(PoseStamped(header=msg.header, pose=msg.pose.pose))
+        # In `both`, lift the sim's odom pose into the MAP frame via the same map<-odom as the real
+        # robot (AMCL), so /dt/sim_pose is directly comparable to /dt/real_pose (both MAP frame).
+        # Publishing it raw (odom frame) would make the sync discrepancy carry the full map<-odom
+        # offset instead of the true real-vs-sim divergence. The twin starts co-located and mirrors
+        # the real robot 1:1, so the real robot's map<-odom is the right lift for the sim too.
+        map_xyyaw = geometry.compose_pose_2d(self._T_map_odom, self._pose_xyyaw(msg.pose.pose))
+        self.pub_sim_pose.publish(self._map_posestamped(map_xyyaw))
 
     def _on_battery(self, msg: BatteryState) -> None:
         self._battery_v = msg.voltage

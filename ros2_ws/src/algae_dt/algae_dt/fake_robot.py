@@ -102,6 +102,7 @@ class FakeRobot(Node):
         s.header.frame_id = 'base_scan'
         s.angle_min = -math.pi
         s.angle_increment = 2.0 * math.pi / self.scan_n
+        s.angle_max = s.angle_min + (self.scan_n - 1) * s.angle_increment   # consistent geometry for Nav2
         s.range_min = self.range_min
         s.range_max = self.range_max
         s.ranges = [self.scan_far] * self.scan_n

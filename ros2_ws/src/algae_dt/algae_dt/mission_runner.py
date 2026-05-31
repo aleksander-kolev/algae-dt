@@ -21,7 +21,7 @@ import threading
 import time
 
 import rclpy
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import PackageNotFoundError, get_package_share_directory
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
@@ -100,20 +100,30 @@ class MissionRunner(Node):
         self.pub_state.publish(String(data=s))
 
     def _load_grid(self):
-        """Best-effort load of the static map (maps/map.pgm) into an occupancy grid for goal
-        projection. Returns None (projection disabled, goals = raw bloom centre) if the installed
-        package/map is unavailable — so the node still runs in bare unit-test environments."""
+        """Load the static map (maps/map.pgm) into an occupancy grid for goal projection. A genuinely
+        absent package/map (e.g. a bare unit-test env) disables projection (goals = raw bloom centre)
+        so the node still runs. A PRESENT-but-unparseable map, or a grid whose dimensions disagree
+        with the map params, is a real fault surfaced LOUDLY — not silently degraded to raw near-wall
+        goals (which is exactly the 'robot starts then does nothing near a wall' failure)."""
         try:
             path = os.path.join(get_package_share_directory('algae_dt'), 'maps', 'map.pgm')
             with open(path, 'rb') as f:
                 grid = occupancy.from_pgm(pgm.parse(f.read()))
-            self.get_logger().info(
-                f"goal projection ON: static map {grid.width}x{grid.height}, "
-                f"clearance {self.goal_clearance_m:.2f} m")
-            return grid
-        except Exception as exc:
-            self.get_logger().warn(f"static map unavailable; goal projection OFF: {exc!r}")
+        except (PackageNotFoundError, FileNotFoundError) as exc:
+            self.get_logger().warn(f"static map not found; goal projection OFF: {exc!r}")
             return None
+        except Exception as exc:                          # a present map that won't parse is a fault
+            self.get_logger().error(f"static map FAILED to load; goal projection OFF: {exc!r}")
+            return None
+        if grid.width != self._map_info.width_px or grid.height != self._map_info.height_px:
+            self.get_logger().error(
+                f"map/params mismatch: grid {grid.width}x{grid.height} vs params "
+                f"{self._map_info.width_px}x{self._map_info.height_px}; goal projection OFF")
+            return None
+        self.get_logger().info(
+            f"goal projection ON: static map {grid.width}x{grid.height}, "
+            f"clearance {self.goal_clearance_m:.2f} m")
+        return grid
 
     # -------------------------------------------------------------- callbacks
     def _on_blooms(self, msg: MarkerArray) -> None:
@@ -197,8 +207,13 @@ class MissionRunner(Node):
                     break
                 if outcome == 'arrived':
                     self._set_state(f'spraying:{target.id}')
-                    full = self._spray()
-                    self._apply_outcome(target.id, B.mark_treated if full else B.set_pending)
+                    completed = self._spray()
+                    if completed:
+                        self._apply_outcome(target.id, B.mark_treated)
+                    elif self._estop or not self._running:
+                        self._apply_outcome(target.id, B.set_pending)   # operator Stop/E-STOP -> resumable
+                    else:
+                        self._apply_outcome(target.id, B.mark_skipped)  # spray stalled (backstop) -> skip
                 else:  # 'failed'
                     self._apply_outcome(target.id, B.mark_skipped)
                 self._publish_markers()
@@ -206,7 +221,8 @@ class MissionRunner(Node):
             self.get_logger().error(f"mission worker aborted: {exc!r}")
             self._set_state('idle')
         finally:
-            self._running = False
+            with self._lock:                               # write under the lock _start checks
+                self._running = False
 
     def _apply_outcome(self, bloom_id: int, transition) -> None:
         """Apply a bloom state transition, tolerating a bloom removed mid-mission (operator
@@ -263,16 +279,22 @@ class MissionRunner(Node):
         """Chemical spraying = spin in place until the robot has ACTUALLY turned spray_revolutions full
         360 deg, measured CLOSED-LOOP from odometry yaw (/dt/odom_active, accumulated wrap-safe). This
         guarantees the full spin COUNT regardless of real-time-factor or sluggish tracking — a fixed
-        open-loop duration under-rotates (the robot turns fewer than N revs). A backstop of
-        spray_time_margin x the nominal spin time prevents an endless spin if odom stalls. Returns
-        False if cut short by Stop/E-STOP so the bloom honestly stays pending."""
+        open-loop duration under-rotates (the robot turns fewer than N revs). A wall-clock backstop of
+        spray_time_margin x the nominal spin time prevents an endless spin if odom stalls.
+
+        Returns True only when the full count was actually reached. Returns False if cut short — by
+        Stop/E-STOP (operator) or by the backstop firing before the count completed (odom stalled);
+        either way the caller keeps the bloom honestly un-treated."""
         omega = self.spray_omega if self.spray_omega > 0.0 else 1.0
         target = self.spray_revolutions * 2.0 * math.pi
-        backstop = self._now_s() + (target / omega) * self.spray_time_margin
+        # Wall-clock backstop, matching the time.sleep() below. Must NOT use the node clock: under
+        # use_sim_time that is sim time, which at a real-time-factor < 1 expires in fewer wall
+        # seconds and would cut the spin short before the full count (the bug this method exists for).
+        backstop = time.monotonic() + (target / omega) * self.spray_time_margin
         period = 1.0 / self.cmd_rate_hz
         turned = 0.0
         last = self._robot_yaw
-        while turned < target and self._now_s() < backstop:
+        while turned < target and time.monotonic() < backstop:
             if self._estop or not self._running:
                 self._publish_spin(0.0)
                 return False
@@ -282,10 +304,12 @@ class MissionRunner(Node):
             turned += abs(geometry.angle_diff(y, last))   # wrap-safe |delta yaw| since last sample
             last = y
         self._publish_spin(0.0)
+        if turned < target:    # backstop fired before the count completed -> odom stalled, NOT sprayed
+            self.get_logger().warn(
+                f"spray backstop hit at {turned / (2.0 * math.pi):.2f}/{self.spray_revolutions} "
+                f"revs (odom stalled?) -> bloom NOT marked treated")
+            return False
         return True
-
-    def _now_s(self) -> float:
-        return self.get_clock().now().nanoseconds * 1e-9
 
     def _publish_spin(self, omega: float) -> None:
         ts = TwistStamped()

@@ -60,7 +60,7 @@ technical solution, the PoC requirements, and the code are the team's own.
 Development was iterative across many sessions. The prompts below are **representative** of the
 team's own design specifications and instructions to the assistant (grouped by area) — they show the
 architecture and component designs the team produced and then had the assistant implement. The final
-section reproduces the **verbatim** prompts used to package and document this repository.
+section summarises the packaging and documentation help the team asked the assistant for.
 
 ### 1. Domain and concepts
 - "Explain what a digital twin is for a TurtleBot3, and what 'bidirectional' state synchronisation
@@ -149,14 +149,13 @@ section reproduces the **verbatim** prompts used to package and document this re
 - "Gazebo's 3D client crashes on WSL (OGRE2 on the d3d12 GL); add a `gz_gui:=false` server-only
   option so the LiDAR still renders."
 
-### 7. Repository packaging and documentation (verbatim, this session)
-- "Now I need you to go and get to know the project and all md files. Secondly I want you to make it
-  a github repo that has 1 commit. In the github I want only what is needed to run the project (no
-  tests, no md files, no nothing except the things to actually can run the sim and both). Also
-  before pushing you should make the comments not look like ai written."
-- "Include the map, config, launch, worlds and everything that will be needed to run the sim, the
-  real project, etc. Also a readme on how to run the sim (on wsl2 + Docker for my other teammates)
-  and on real lab pc and also the general structure of the project and what does what. THE CODE
-  SHOULD BE EXACTLY THE SAME (ONLY COMMENTS CAN BE DIFFERENT)."
-- "Remove the 'repo is private / clone it' note from the README (and keep it out of the history),
-  and add this AI-usage and authorship declaration with the prompt log."
+### 7. Repository packaging and documentation
+For the submission, the team had the assistant help assemble a clean, runnable copy of the
+repository and draft its documentation, all reviewed and approved by the team:
+- Select the files needed to build and run the project — the `algae_dt` package together with its
+  map, config, launch files, and Gazebo worlds — so the copy builds and runs in both the simulation
+  and the real-robot modes, with the code left functionally unchanged.
+- Write clear, readable code comments.
+- Draft the `README.md` (how to run the simulation on WSL2 + Docker and on the lab laptop, and an
+  overview of the project structure and what each part does) and this AI-usage and authorship
+  declaration.

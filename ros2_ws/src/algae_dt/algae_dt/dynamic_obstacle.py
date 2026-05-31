@@ -23,6 +23,8 @@ from algae_dt.lib import trajectory
 
 
 class DynamicObstacle(Node):
+    _SET_POSE_REFRESH_AFTER = 20      # consecutive failed set_pose calls (~2 s at 10 Hz) before re-spawning
+
     def __init__(self, **kwargs) -> None:
         super().__init__('dynamic_obstacle', **kwargs)
         gp = self._declare
@@ -44,6 +46,7 @@ class DynamicObstacle(Node):
 
         self._t0 = self._now()
         self._spawned = False
+        self._set_pose_fails = 0          # consecutive set_pose failures after a confirmed spawn
         self.create_timer(1.0 / self.rate_hz, self._tick)
         self.get_logger().info(
             f"dynamic_obstacle: '{self.name}' sweeping {self.axis} +/-{self.amplitude} m "
@@ -76,7 +79,19 @@ class DynamicObstacle(Node):
             self.get_logger().info(f"obstacle '{self.name}' spawned")
         x, y = trajectory.oscillate(self._now() - self._t0, self.cx, self.cy,
                                     self.amplitude, self.period, self.axis)
-        self._set_pose(x, y)
+        if self._set_pose(x, y) or not self._spawned:
+            self._set_pose_fails = 0
+        else:
+            # The model was confirmed spawned but set_pose keeps failing (e.g. a world reset removed
+            # it): don't freeze silently — re-arm the spawn so _tick re-creates it next pass instead
+            # of teleporting a model that no longer exists.
+            self._set_pose_fails += 1
+            if self._set_pose_fails >= self._SET_POSE_REFRESH_AFTER:
+                self.get_logger().warn(
+                    f"obstacle '{self.name}' set_pose failing repeatedly; re-creating it",
+                    throttle_duration_sec=5.0)
+                self._spawned = False
+                self._set_pose_fails = 0
 
     def _gz(self, service: str, reqtype: str, req: str, timeout_ms: int = 300) -> bool:
         """Call a gz Boolean service; return True iff it replied `data: true`. Best-effort: a missing
