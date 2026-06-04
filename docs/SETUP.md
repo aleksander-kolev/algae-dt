@@ -99,6 +99,14 @@ dirty — clean rebuild (course Lidar-DT "Common Problems"):
 cd ~/turtlebot3_ws && rm -rf build/ install/ log/ && colcon build --symlink-install && source install/setup.bash
 ```
 
+If the workspace was **copied from another machine/user** (CMake errors naming a foreign path like
+`/home/test/turtlebot3_ws`, `PermissionError` on `install/**/local_setup.dsv`, a
+`turtlebot3_ws (Copy)` folder), a clean rebuild in place is NOT enough — the copied tree has the old
+absolute paths baked in and files you don't own. Recover with **`./scripts/lab_fix_workspace.sh`**
+(no sudo, no Docker: extracts only `src/` from the fail-safe zip in `~/Downloads`, quarantines the
+broken dirs, repairs `~/.bashrc`, clean-rebuilds natively, verifies). Details:
+`docs/RUN_ON_LAB_PC.md` §"Broken/copied workspace".
+
 ---
 
 ## 3. Connecting to the real robot (course "Connecting lab laptop to lab robot.pdf")

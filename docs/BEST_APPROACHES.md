@@ -178,6 +178,19 @@ Confirmed before implementation:
   test-pumped executor; adding one more 30 Hz publisher made the spray loop's odom view lag and
   over-rotate. Keep harness side-traffic at the lowest realistic rate (and remember `spin_once`
   executes ONE callback — the GUI drains a bounded batch per Qt tick for the same reason).
+- **A colcon workspace copied from another machine/user is UNSALVAGEABLE in place — only `src/`
+  travels** (hit on the lab PC, 2026-06). `build/` + `install/` bake the ABSOLUTE workspace path
+  into every CMakeCache.txt and setup hook ("CMakeCache.txt directory … is different than …
+  /home/test/turtlebot3_ws"), and a file-manager copy keeps the other user's ownership →
+  `PermissionError` on mere `stat()` (colcon dies inside `create_environment_hooks`), unfixable
+  without sudo. Don't repair — rebuild the workspace: re-extract ONLY `src/` from the fail-safe
+  zip into a fresh `~/turtlebot3_ws`, quarantine the old dirs by RENAME (needs only write on
+  `$HOME`, so it works on foreign-owned trees no sudo can chown), `chmod -R u+rwX`, scrub stale
+  `~/.bashrc` source lines, then clean-rebuild in a SANITIZED env (`env -i`): a shell that ever
+  sourced the broken ws carries a poisoned `AMENT_PREFIX_PATH`/`PYTHONPATH` into the new build.
+  Also beware the path itself — `turtlebot3_ws (Copy)` contains a space, which half the ROS
+  tooling can't take. Automated end-to-end by `scripts/lab_fix_workspace.sh` (tested by
+  `scripts/test_lab_fix_workspace.sh`, container suite incl. foreign-owned + mode-000 files).
 
 ## TA-familiar fallback: the manual multi-terminal launch
 If a combined `bringup.launch.py` misbehaves in the lab, fall back to the course's per-component

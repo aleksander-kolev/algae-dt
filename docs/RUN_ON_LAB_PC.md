@@ -58,6 +58,37 @@ the arena, so the real start never matches the origin — you must tell AMCL the
    AMCL/Nav2 restart** (a restart re-seeds to the origin). Skipping it → Nav2 plans from a wrong pose
    → the robot drives wrong or skips goals.
 
+## Broken/copied workspace? Native recovery (no Docker, no sudo)
+Some lab laptops have **no Docker** but DO have native ROS 2 Jazzy + a full `turtlebot3_ws` whose
+stack is built **from source in `src/`**. If that workspace was copied from another machine/user,
+every build fails like this (seen 2026-06):
+- `CMakeCache.txt directory … is different than … /home/test/turtlebot3_ws` — the copied
+  `build/`+`install/` have the OTHER machine's absolute path baked in;
+- `PermissionError: [Errno 13] … local_setup.dsv` — copied files owned by another user, colcon dies
+  on a mere `stat()`; you can't chown them without sudo;
+- the tree sits at `~/turtlebot3_ws (Copy)` — the space breaks half the tooling — and `~/.bashrc`
+  still sources the broken paths.
+
+With the fail-safe **zip of the workspace in `~/Downloads`** (any internal folder name), run:
+```bash
+./scripts/lab_fix_workspace.sh        # finds the zip, fixes everything, rebuilds, verifies
+```
+It (1) extracts ONLY `src/` from the zip — `build/install/log` are machine-specific poison and are
+skipped; (2) renames every `~/turtlebot3_ws*` dir to `turtlebot3_ws.broken.<timestamp>` — your local
+experiments are KEPT, and a rename needs no sudo even on foreign-owned files; (3) normalizes
+permissions (`chmod -R u+rwX`); (4) comments out stale `~/.bashrc` lines and installs one managed
+block (`ROS_DOMAIN_ID=36`, `TURTLEBOT3_MODEL=burger`, `LDS_MODEL=LDS-02`; backup kept); (5) runs a
+clean `colcon build --symlink-install` in a sanitized environment; (6) verifies the key packages
+resolve. **Then open a NEW terminal** (old ones carry the broken env) and launch
+`ros2 launch algae_dt bringup.launch.py mode:=both` (or `mode:=sim_only`) directly — on a
+Docker-less laptop this native path IS the demo path.
+
+Options: `--zip PATH` · `--from-dir DIR` (no zip — salvage `src/` from a readable dir) ·
+`--domain N` · `--no-bashrc` · `--no-build` · `--keep-zip-algae` (keep the zip's `algae_dt` instead
+of refreshing from the repo checkout) · `--purge-quarantine`. Tested end-to-end by
+`scripts/test_lab_fix_workspace.sh` (container suite incl. foreign-owned files, mode-000 artifacts,
+"(Copy)" dirs, tar.gz, and unzip-less fallback).
+
 ## Prerequisites (the script errors clearly if any fail)
 - **Rootful Docker** — `both` reaches the robot over DDS via real `--net=host`; **rootless can't**
   (no LAN multicast). No-sudo can't install rootful → a TA must enable it.
