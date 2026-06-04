@@ -1,8 +1,8 @@
-"""Small P5/P2 PGM parser for the GUI map canvas. No ROS.
+"""In-tree P5/P2 PGM parser (no ROS) for the GUI map canvas. Implemented TDD per PLAN T4.1.
 
 Qt's PNM image plugin isn't guaranteed in a minimal PyQt5, so the operator GUI parses map.pgm here
 and builds a Format_Grayscale8 QImage. Handles binary (P5) and ascii (P2) bodies, `#` comments in
-the header, and maxval scaling to 8-bit.
+the header, and maxval scaling to 8-bit. Tests: test/test_pgm.py.
 """
 from __future__ import annotations
 

@@ -21,7 +21,7 @@ def _data_files():
 setup(
     name=package_name,
     version='0.1.0',
-    packages=find_packages(),
+    packages=find_packages(exclude=['test']),
     data_files=_data_files(),
     install_requires=['setuptools'],
     zip_safe=True,
@@ -29,6 +29,7 @@ setup(
     maintainer_email='team36@student.tue.nl',
     description='TurtleBot3 Burger digital-twin DT layer (TU/e 2IRR10) on the default turtlebot3 stack.',
     license='MIT',
+    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'twin_mediator = algae_dt.twin_mediator:main',

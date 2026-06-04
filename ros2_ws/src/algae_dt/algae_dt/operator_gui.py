@@ -1,24 +1,23 @@
-"""operator_gui — the PyQt5 operator console.
+"""operator_gui — PyQt5 operator console. PLAN T4.2.
 
-Split in two so the logic can run without a display:
+Two parts kept separate so the logic is testable without a display:
   * GuiBridge(Node) — the ROS side (subscribes /dt/* ONLY; publishes /dt/blooms, /dt/mission_cmd,
     /dt/estop_cmd). Qt-free and unit-testable.
   * _make_window(bridge) — builds the PyQt5 window (map canvas via the in-tree lib.pgm parser, real
     + sim pose overlay, live /dt/scan_active, bloom markers, click-to-place, Start/Stop/Clear/E-STOP,
     banners). PyQt5 is imported HERE, not at module import time, so colcon build / entry-point
-    discovery never require PyQt5.
+    discovery never require PyQt5 (RULES/HANDOFF).
 
 Headless: QT_QPA_PLATFORM=offscreen. The window drives rclpy via a QTimer spin_once.
 """
 from __future__ import annotations
 
+import functools
 import math
-import os
+import time
 
 import rclpy
-from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PoseStamped, Vector3
-from nav_msgs.msg import Odometry  # noqa: F401
 from rclpy.node import Node
 from rclpy.qos import (DurabilityPolicy, QoSProfile, ReliabilityPolicy,
                        qos_profile_sensor_data)
@@ -27,6 +26,7 @@ from std_msgs.msg import Bool, Float64, String
 from visualization_msgs.msg import Marker, MarkerArray
 
 from algae_dt.lib import geometry, hud
+from algae_dt.lib.ros_utils import declare_get, load_package_map
 
 
 def _latched(depth: int = 1) -> QoSProfile:
@@ -39,19 +39,14 @@ class GuiBridge(Node):
 
     def __init__(self, **kwargs) -> None:
         super().__init__('operator_gui', **kwargs)
-        gp = self._declare
-        self.map_info = geometry.MapInfo(
-            resolution=gp('map_resolution', 0.05),
-            origin_x=gp('map_origin_x', -2.051),
-            origin_y=gp('map_origin_y', -4.194),
-            width_px=gp('map_width_px', 86),
-            height_px=gp('map_height_px', 110),
-        )
+        gp = functools.partial(declare_get, self)
+        self.map_info = geometry.map_info_from_params(gp)
         self.battery_low_v = gp('battery_low_v', 11.0)
         self.battery_critical_v = gp('battery_critical_v', 10.5)
         self.bloom_radius = gp('bloom_radius_m', 0.15)
         self.range_min = gp('scan_range_min_m', 0.12)
         self.range_max = gp('scan_range_max_m', 3.5)
+        self.latency_budget_ms = gp('latency_budget_ms', 250.0)
 
         # latest state for the canvas/banners
         self.real_pose = None
@@ -66,6 +61,8 @@ class GuiBridge(Node):
         self.safety_blocked = False
         self.mission_state = 'idle'
         self.estop = False
+        self.last_alert = ''
+        self.last_alert_t = float('-inf')   # time.monotonic() of the last /dt/alerts message
 
         self._next_id = 0
         self._blooms: list[tuple[int, float, float]] = []
@@ -86,12 +83,9 @@ class GuiBridge(Node):
         self.create_subscription(Bool, '/dt/safety', self._on_safety, _latched())
         self.create_subscription(String, '/dt/mission_state', self._on_mission_state, _latched(10))
         self.create_subscription(Bool, '/dt/estop', self._on_estop, _latched())
+        self.create_subscription(String, '/dt/alerts', self._on_alert, 10)
 
-    def _declare(self, name, default):
-        self.declare_parameter(name, default)
-        return self.get_parameter(name).value
-
-    # ---- inbound /dt/* state (one named handler per topic) ----
+    # ---- inbound /dt/* state (named handlers so the mapping is unit-testable, F17) ----
     def _on_real_pose(self, m): self.real_pose = _xyyaw(m)
     def _on_sim_pose(self, m): self.sim_pose = _xyyaw(m)
     def _on_scan(self, m): self.scan = m
@@ -104,6 +98,10 @@ class GuiBridge(Node):
     def _on_safety(self, m): self.safety_blocked = m.data
     def _on_mission_state(self, m): self.mission_state = m.data
     def _on_estop(self, m): self.estop = m.data
+
+    def _on_alert(self, m):
+        self.last_alert = m.data
+        self.last_alert_t = time.monotonic()
 
     # ---- operator actions ----
     def place_bloom(self, x: float, y: float) -> None:
@@ -140,17 +138,13 @@ class GuiBridge(Node):
 
 
 def _xyyaw(ps: PoseStamped):
-    p, o = ps.pose.position, ps.pose.orientation
-    return (p.x, p.y, geometry.yaw_from_quaternion(o.z, o.w))
+    return geometry.pose_xyyaw(ps.pose)
 
 
 def _load_map_qimage(map_info):
     """Parse maps/map.pgm with the in-tree parser into a Format_Grayscale8 QImage."""
     from PyQt5 import QtGui
-    from algae_dt.lib import pgm
-    path = os.path.join(get_package_share_directory('algae_dt'), 'maps', 'map.pgm')
-    with open(path, 'rb') as f:
-        img = pgm.parse(f.read())
+    img = load_package_map()
     qimg = QtGui.QImage(bytes(img.pixels), img.width, img.height,
                         img.width, QtGui.QImage.Format_Grayscale8)
     return qimg.copy()   # detach from the temporary buffer
@@ -189,14 +183,22 @@ def _make_window(bridge: GuiBridge):
             return QtCore.QPointF(ox + (col + 0.5) * sc, oy + (row + 0.5) * sc)
 
         def screen_to_world(self, sx, sy):
+            """Inverse of world_to_screen, or None for a click OUTSIDE the map image (the canvas
+            keeps aspect ratio, so it has dark margins; a margin click used to truncate to a
+            plausible-looking off-map world point and place a phantom bloom there)."""
             sc, ox, oy = self._xform()
-            col = (sx - ox) / sc
-            row = (sy - oy) / sc
-            return geometry.pixel_to_world(int(col), int(row), self.bridge.map_info)
+            mi = self.bridge.map_info
+            col = math.floor((sx - ox) / sc)
+            row = math.floor((sy - oy) / sc)
+            if not (0 <= col < mi.width_px and 0 <= row < mi.height_px):
+                return None
+            return geometry.pixel_to_world(col, row, mi)
 
         def mousePressEvent(self, ev):
-            x, y = self.screen_to_world(ev.x(), ev.y())
-            self.bridge.place_bloom(x, y)
+            w = self.screen_to_world(ev.x(), ev.y())
+            if w is None:
+                return                       # click in the margin / outside the map: not a bloom
+            self.bridge.place_bloom(*w)
             self.update()
 
         def paintEvent(self, _ev):
@@ -213,7 +215,13 @@ def _make_window(bridge: GuiBridge):
             qp.end()
 
         def _active_pose(self):
-            return self.bridge.sim_pose or self.bridge.real_pose
+            """Pose of the robot /dt/scan_active belongs to. The active (bare-topic) robot is the
+            SIM in sim_only and the REAL Burger in real_only/both — anchoring the real robot's scan
+            to the sim pose made the overlay visibly detach exactly when real and sim diverge (the
+            very thing the twin is meant to show)."""
+            if self.bridge.mode == 'sim_only':
+                return self.bridge.sim_pose or self.bridge.real_pose
+            return self.bridge.real_pose or self.bridge.sim_pose
 
         def _draw_scan(self, qp):
             scan, pose = self.bridge.scan, self._active_pose()
@@ -266,7 +274,8 @@ def _make_window(bridge: GuiBridge):
             self.canvas = MapCanvas(bridge)
 
             self.banners = {k: QtWidgets.QLabel(k) for k in
-                            ('mode', 'mission', 'sync', 'latency', 'battery', 'safety', 'estop')}
+                            ('mode', 'mission', 'sync', 'latency', 'battery', 'safety', 'estop',
+                             'alerts')}
             panel = QtWidgets.QVBoxLayout()
             for lab in self.banners.values():
                 lab.setMargin(6)
@@ -293,18 +302,31 @@ def _make_window(bridge: GuiBridge):
             self._repaint.start(100)
 
         def _tick(self):
-            if rclpy.ok():
+            # Drain ALL ready work each tick (bounded): spin_once executes at most ONE callback,
+            # and 12 subscriptions at pose/scan rates outrun one-callback-per-40ms — the overlay
+            # then lags real time and never catches up.
+            if not rclpy.ok():
+                return
+            for _ in range(32):
                 rclpy.spin_once(self.bridge, timeout_sec=0.0)
 
         def _refresh(self):
             b = self.bridge
-            self._set('mode', f"MODE: {b.mode}", 'green')
+            shadow = "  (green = commanded shadow)" if b.mode == 'sim_only' else ""
+            self._set('mode', f"MODE: {b.mode}{shadow}", 'green')
             self._set('mission', f"MISSION: {b.mission_state}", 'green')
             self._set('sync', f"SYNC: {hud.sync_text(b.sync_ok)}  "
                       f"dxy={b.sync_err[0]:.2f} dyaw={b.sync_err[1]:.2f}",
                       'green' if b.sync_ok else 'red')
             lat = '—' if math.isnan(b.latency_ms) else f"{b.latency_ms:.0f} ms"
-            self._set('latency', f"LATENCY: {lat}", 'green')
+            lat_col = ('green' if math.isnan(b.latency_ms)
+                       or b.latency_ms <= b.latency_budget_ms else 'red')
+            self._set('latency', f"LATENCY: {lat}", lat_col)
+            alert_age = time.monotonic() - b.last_alert_t
+            if b.last_alert and alert_age < 10.0:
+                self._set('alerts', f"ALERT: {b.last_alert}", 'red')
+            else:
+                self._set('alerts', "ALERTS: none", 'green')
             bcol = 'green' if math.isnan(b.battery_v) else hud.battery_color(
                 b.battery_v, b.battery_low_v, b.battery_critical_v)
             bv = '—' if math.isnan(b.battery_v) else f"{b.battery_v:.2f} V"

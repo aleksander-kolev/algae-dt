@@ -1,22 +1,32 @@
 #!/usr/bin/env bash
-# lab_run.sh — the lab-laptop runner. By default it brings up the full digital-twin demo
-# (mode:=both — real Burger leads, Gazebo sim mirrors) inside the Docker container from a fresh
-# clone, and errors out rather than start a half-demo if both can't run. If the robot isn't
-# available, pass --sim for the hardware-free sim_only fallback.
+# =============================================================================
+# lab_run.sh — THE lab-laptop runner. By DEFAULT it brings up the FULL digital-twin demo
+# (mode:=both — real Burger leads + Gazebo sim mirror) inside the course Docker container, from a
+# fresh `git clone`, and ERRORS rather than start a half-demo if `both` cannot run. If the robot is
+# unavailable, pass `--sim` for the hardware-free sim_only fallback (a valid graded demo) instead.
 #
 # Usage (run from anywhere inside the cloned repo):
 #   ./scripts/lab_run.sh             # full real+sim demo (robot #36 @ 192.168.8.36, domain 36)
-#   ./scripts/lab_run.sh --sim       # hardware-free sim_only fallback (no robot/DDS needed)
+#   ./scripts/lab_run.sh --sim       # hardware-free sim_only fallback demo (no robot/DDS needed)
 #   ./scripts/lab_run.sh --rebuild   # clean colcon build first
+#   ./scripts/lab_run.sh --no-gz-gui # skip the gz 3D client (weak GL stack; RViz+console still show all)
 #   TB3_IMAGE=name / ROS_DOMAIN_ID=n / ROBOT_IP=ip   # overrides if image/robot differ
 #
-# What it needs (and errors on if missing — both can't run without these):
-#   1. Rootful Docker. both talks to the robot over ROS 2 DDS, which needs a real --net=host (host
-#      network namespace). Rootless --net=host (RootlessKit/slirp4netns) has no LAN multicast, so
-#      the robot is unreachable.
-#   2. A turtlebot3 image (turtlebot3_ws or algae-dt:dev), else it builds one from
-#      scripts/Dockerfile (needs internet, ~10-20 min).
-#   3. The real robot reachable and publishing /scan (checked from inside the container).
+# RViz opens AUTOMATICALLY in both/real_only (the launch use_rviz default is mode-aware) — it is
+# REQUIRED there: the "2D Pose Estimate" click that seeds AMCL has no other UI. The --sim fallback
+# also opens RViz and skips the crash-prone gz 3D client (mirrors docker/open_sim.sh).
+#
+# WHAT IT REQUIRES (and ERRORS on if absent — `both` cannot exist without these):
+#   1. ROOTFUL Docker. `both` talks to the robot over ROS 2 DDS, which needs real `--net=host`
+#      (host network namespace). Rootless Docker's `--net=host` is RootlessKit/slirp4netns — NO LAN
+#      multicast — so the robot is unreachable. No sudo can't install rootful → that's a TA blocker.
+#   2. A turtlebot3 image (course `turtlebot3_ws` / our `algae-dt:dev`), else it BUILDS one from
+#      scripts/Dockerfile (needs internet + ~10–20 min).
+#   3. The real robot reachable + publishing `/scan` (verified from inside the container).
+#
+# PROVENANCE: docker run / sourcing / build / launch are verbatim from Canvas ("How to run Gazebo",
+# "Changing Robot Inflation", "DT Example", "Connecting lab laptop to robot") — docs/RUN_ON_LAB_PC.md.
+# =============================================================================
 set -euo pipefail
 
 log() { printf '[%s] %s\n' "$1" "${*:2}" >&2; }
@@ -25,11 +35,22 @@ die() { log FATAL "$*"; exit 3; }
 # ---- args ----
 REBUILD=false
 MODE="both"        # default: the lab runner brings up the FULL real+sim demo
+GZ_GUI=true
 for a in "$@"; do case "$a" in
   --rebuild) REBUILD=true ;;
   --sim|--fallback) MODE="sim_only" ;;
-  *) die "unknown arg: $a   (use --sim for the hardware-free fallback demo, --rebuild for a clean build)" ;;
+  --no-gz-gui) GZ_GUI=false ;;
+  *) die "unknown arg: $a   (use --sim for the hardware-free fallback demo, --rebuild for a clean build, --no-gz-gui to skip the gz 3D client)" ;;
 esac; done
+
+# Launch args per mode. both/real_only: use_rviz auto-resolves to true (AMCL seeding needs it).
+# --sim: mirror docker/open_sim.sh — RViz on, gz 3D client off (its large OGRE2 VBO crashes weak
+# GL stacks; the gz SERVER still renders the LiDAR and the operator console + RViz show everything).
+if [ "$MODE" = sim_only ]; then
+  LAUNCH_ARGS="use_rviz:=true gz_gui:=false"
+else
+  LAUNCH_ARGS="gz_gui:=$GZ_GUI"
+fi
 
 # ---- paths / config ----
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -52,7 +73,7 @@ log INFO "demoing algae_dt @ commit ${GIT_REF}${GIT_DIRTY}  (from $REPO)"
 
 echo "===================== PREFLIGHT (mode=$MODE; errors if it can't run) =====================" >&2
 
-# ---- requirement 1: rootful Docker (rootless can't reach the robot, so no 'both') ----
+# ---- HARD REQUIREMENT 1: rootful Docker (rootless can't reach the robot → can't do 'both') ----
 require_rootful_docker() {
   command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 \
     || die "no usable Docker. 'both' needs ROOTFUL Docker (real --net=host for the robot's DDS). You can't install rootful without sudo, and rootless can't reach the robot — so 'both' cannot run here. Ask a TA to enable Docker / add you to the 'docker' group."
@@ -62,7 +83,7 @@ require_rootful_docker() {
   log OK "rootful Docker usable"
 }
 
-# ---- requirement 2: a turtlebot3 image (build one if none) ----
+# ---- HARD REQUIREMENT 2: a turtlebot3 image (build one if none; errors if the build can't) ----
 ensure_image() {
   for img in "${IMAGE_CANDIDATES[@]}"; do
     if docker image inspect "$img" >/dev/null 2>&1; then IMAGE="$img"; log OK "using image '$IMAGE'"; return; fi
@@ -84,7 +105,7 @@ fi
 ensure_image
 log OK "image=$IMAGE  ROS_DOMAIN_ID=$DOMAIN  mode=$MODE"
 
-# ---- (re)create the workspace + copy the package in ----
+# ---- recreate the workspace (you deleted it) + copy the package in (course "How to create Packages" §3) ----
 log INFO "(re)creating $WS/src/algae_dt"
 mkdir -p "$WS/src"; rm -rf "$WS/src/algae_dt"; cp -r "$PKG_SRC" "$WS/src/algae_dt"
 [ "$REBUILD" = true ] && rm -rf "$WS/build" "$WS/install" "$WS/log"
@@ -101,7 +122,7 @@ if [ "$MODE" = both ]; then
     In RViz set "2D Pose Estimate" on the robot's real spot before starting a mission.
 
 EOF
-  # ---- requirement 3a: robot reachable (fast-fail; the real check is /scan inside the container) ----
+  # ---- HARD REQUIREMENT 3a: robot reachable (advisory fast-fail; the authoritative gate is /scan inside) ----
   ping -c1 -W2 "$ROBOT_IP" >/dev/null 2>&1 \
     || die "robot $ROBOT_IP not reachable — 'both' needs the real robot. Power it on, start the Pi bringup, join Wi-Fi AP2IRR10, then re-run.
          For the hardware-free fallback demo instead (a valid graded sim_only demo):  ./scripts/lab_run.sh --sim"
@@ -126,11 +147,11 @@ log INFO "launching FULL DEMO (mode:=both) inside '$IMAGE' (Ctrl-C to stop)"
 echo "   teleop in another terminal:  docker exec -it $CONTAINER bash -lc 'source /opt/ros/jazzy/setup.bash; source /opt/turtlebot3_ws/install/setup.bash 2>/dev/null; source /ws/install/setup.bash; ros2 run turtlebot3_teleop teleop_keyboard --ros-args -r /cmd_vel:=/dt/cmd_vel_raw'" >&2
 echo >&2
 
-# ---- run: --user $(id -u) for rootful. Requirement 3b: /scan must be visible inside, else fail. ----
+# ---- run: rootful uses the course --user $(id -u). HARD REQUIREMENT 3b: /scan visible inside, else FAIL. ----
 exec docker run --rm -it --name "$CONTAINER" --net=host \
   "${X11_ARGS[@]}" \
   -v "$WS:/ws" -w /ws -e HOME=/ws \
-  -e TURTLEBOT3_MODEL=burger -e ROS_DOMAIN_ID="$DOMAIN" -e DT_MODE="$MODE" \
+  -e TURTLEBOT3_MODEL=burger -e ROS_DOMAIN_ID="$DOMAIN" -e DT_MODE="$MODE" -e DT_LAUNCH_ARGS="$LAUNCH_ARGS" \
   --user "$(id -u):$(id -g)" "$IMAGE" bash -lc '
     set -e
     source /opt/ros/jazzy/setup.bash
@@ -152,6 +173,7 @@ exec docker run --rm -it --name "$CONTAINER" --net=host \
     echo "-- colcon build --packages-select algae_dt --"
     colcon build --packages-select algae_dt
     source install/setup.bash
-    echo "-- ros2 launch algae_dt bringup.launch.py mode:=$DT_MODE --"
-    exec ros2 launch algae_dt bringup.launch.py mode:="$DT_MODE"
+    echo "-- ros2 launch algae_dt bringup.launch.py mode:=$DT_MODE $DT_LAUNCH_ARGS --"
+    # shellcheck disable=SC2086  # DT_LAUNCH_ARGS is a deliberate word-split list of launch args
+    exec ros2 launch algae_dt bringup.launch.py mode:="$DT_MODE" $DT_LAUNCH_ARGS
   '

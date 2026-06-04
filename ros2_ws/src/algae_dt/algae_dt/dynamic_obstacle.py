@@ -1,9 +1,9 @@
-"""dynamic_obstacle — a moving obstacle for the "live environment change" demo.
+"""dynamic_obstacle — a moving obstacle for the pillar-III "live environment change" demo. PLAN T6.1.
 
 Spawns a box into the running Gazebo world and sweeps it across the robot's path (sinusoidal, from
 lib.trajectory) by calling the gz `create` / `set_pose` services. The robot's LiDAR then sees a
-moving obstacle -> the dual-LiDAR gate stops forward motion and/or Nav2 reroutes. The path math is
-pure; the gz calls are best-effort (this is a demo tool, so failures are logged, never fatal). gz calls
+moving obstacle → the dual-LiDAR gate stops forward motion and/or Nav2 reroutes. The path is pure +
+unit-tested; the gz calls are best-effort (a demo tool — failures are logged, never fatal). gz calls
 are deferred out of __init__ so the node constructs without a running sim.
 
 Run alongside a sim_only/both launch:
@@ -11,6 +11,7 @@ Run alongside a sim_only/both launch:
 """
 from __future__ import annotations
 
+import functools
 import re
 import subprocess
 
@@ -20,6 +21,7 @@ from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
 
 from algae_dt.lib import trajectory
+from algae_dt.lib.ros_utils import declare_get
 
 
 class DynamicObstacle(Node):
@@ -27,7 +29,7 @@ class DynamicObstacle(Node):
 
     def __init__(self, **kwargs) -> None:
         super().__init__('dynamic_obstacle', **kwargs)
-        gp = self._declare
+        gp = functools.partial(declare_get, self)
         self.world = self._safe_token(gp('world', 'default'), 'world')
         self.name = self._safe_token(gp('obstacle_name', 'algae_obstacle'), 'obstacle_name')
         self.cx = gp('center_x', 0.6)
@@ -43,6 +45,28 @@ class DynamicObstacle(Node):
         self.do_spawn = gp('spawn', True)
         self.spawn_timeout_ms = int(gp('spawn_timeout_ms', 5000))   # create can be slow on a throttled sim
         self.set_pose_timeout_ms = int(gp('set_pose_timeout_ms', 500))
+        self.keepout_radius_m = gp('keepout_radius_m', 0.30)   # protected radius around the robot spawn
+
+        # The box is <static>true</static> and moved by TELEPORT (set_pose) — Gazebo applies no
+        # collision response, so a sweep through the robot spawn (0,0) would shove the box INTO the
+        # robot. Clamp the amplitude to keep the swept segment out of the keep-out circle; refuse
+        # outright when even the centre violates it.
+        clamped = trajectory.clamp_amplitude_for_keepout(
+            0.0, 0.0, self.cx, self.cy, self.amplitude, self.axis, self.keepout_radius_m)
+        if clamped is None:
+            self.get_logger().error(
+                f"obstacle centre ({self.cx},{self.cy}) is inside the {self.keepout_radius_m} m "
+                "keep-out around the robot spawn (0,0) — refusing to spawn/move the box")
+            self.do_spawn = False
+            self.amplitude = 0.0
+            self._refused = True
+        else:
+            self._refused = False
+            if clamped < self.amplitude:
+                self.get_logger().warn(
+                    f"amplitude clamped {self.amplitude} -> {clamped:.2f} m so the sweep keeps "
+                    f">= {self.keepout_radius_m} m clearance from the robot spawn (0,0)")
+                self.amplitude = clamped
 
         self._t0 = self._now()
         self._spawned = False
@@ -52,24 +76,22 @@ class DynamicObstacle(Node):
             f"dynamic_obstacle: '{self.name}' sweeping {self.axis} +/-{self.amplitude} m "
             f"about ({self.cx},{self.cy}) period {self.period}s in world '{self.world}'")
 
-    def _declare(self, name, default):
-        self.declare_parameter(name, default)
-        return self.get_parameter(name).value
-
     def _now(self) -> float:
         return self.get_clock().now().nanoseconds * 1e-9
 
     @staticmethod
     def _safe_token(value: str, label: str) -> str:
         """Reject gz entity names/worlds that would break the protobuf --req text (quotes/braces/
-        whitespace): validate at the boundary and fail fast instead of emitting a bad request."""
+        whitespace): validate at the boundary, fail fast (RULES §C) instead of emitting a bad request."""
         if not re.fullmatch(r'[A-Za-z0-9_.-]+', value or ''):
             raise ValueError(f"{label} must match [A-Za-z0-9_.-]+ (got {value!r})")
         return value
 
     def _tick(self) -> None:
-        # Retry the create until the service confirms it (data:true). Never set _spawned on an
-        # unconfirmed/slow call and then teleport a model that doesn't exist yet.
+        if self._refused:
+            return     # keep-out violation at construction: never spawn/teleport (already logged)
+        # RETRY the create until the service CONFIRMS it (data:true) — never set _spawned on an
+        # unconfirmed/slow call and then teleport a model that doesn't exist (silent failure, RULES §C).
         if self.do_spawn and not self._spawned:
             if not self._spawn():
                 self.get_logger().warn("obstacle spawn not confirmed yet (slow/absent sim?); retrying",
@@ -96,7 +118,7 @@ class DynamicObstacle(Node):
     def _gz(self, service: str, reqtype: str, req: str, timeout_ms: int = 300) -> bool:
         """Call a gz Boolean service; return True iff it replied `data: true`. Best-effort: a missing
         sim / timeout logs a throttled warning and returns False so the caller can retry (never a
-        silent give-up)."""
+        silent give-up, RULES §C)."""
         try:
             r = subprocess.run(
                 ['gz', 'service', '-s', service, '--reqtype', reqtype,

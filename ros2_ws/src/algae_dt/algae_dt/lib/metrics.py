@@ -1,7 +1,13 @@
-"""Latency calc + sync-CSV row formatting. No ROS dependencies.
+"""Pure latency + CSV-row formatting (no ROS). Implemented TDD per PLAN T3.1 (Rubric ②).
 
-Keeping the CSV format here (out of the node) makes it easy to keep stable: fixed columns, NaN/inf rendered safely, booleans as 0/1, and the optional
+The sync CSV is the trustworthy evidence for the technical review, so its formatting lives here,
+unit-tested: stable columns, NaN/inf rendered safely, booleans as 0/1, and the optional
 safety-event `stop_skew_ms` (real-stop vs sim-stop time delta) blank on ordinary ticks.
+Tests: test/test_metrics.py.
+
+- latency_ms(t_command_s, t_motion_s) -> float   (command -> motion onset)
+- csv_header() -> str
+- csv_row(stamp_s, dxy, dyaw, sensor_err, latency_ms, in_tolerance, stop_skew_ms=None) -> str
 """
 from __future__ import annotations
 

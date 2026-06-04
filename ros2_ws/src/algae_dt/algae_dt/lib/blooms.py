@@ -1,9 +1,10 @@
-"""Bloom bookkeeping: immutable Bloom + BloomField with pure state transitions. No ROS here.
+"""Pure bloom bookkeeping (no ROS), IMMUTABLE. Implemented TDD per PLAN T2.1.
 
-A frozen `Bloom` (id, x, y, radius, state) and a frozen `BloomField` whose transitions return new
-objects and never mutate in place. `treated`/`skipped` are terminal; an in-progress `active`
+A frozen `Bloom` (id, x, y, radius, state) and a frozen `BloomField` whose transitions RETURN NEW
+objects and never mutate (RULES §C). `treated`/`skipped` are terminal; an in-progress `active`
 ("half-treated") bloom is still selectable by `nearest_untreated`, and an aborted spray reverts to
-`pending` via `set_pending` — so a half-treated bloom is never silently skipped.
+`pending` via `set_pending` — so a half-treated bloom is never wrongly skipped (honest accounting,
+BEST_APPROACHES). Tests: test/test_blooms.py.
 """
 from __future__ import annotations
 
@@ -69,8 +70,8 @@ def set_pending(field: BloomField, bloom_id: int) -> BloomField:
 
 
 def retry_skipped(field: BloomField) -> BloomField:
-    """Reset skipped blooms to pending so a fresh Start retries previously-failed targets; treated
-    stays terminal. Returns a new field. Used on mission restart."""
+    """Reset SKIPPED blooms to PENDING so a fresh Start retries previously-failed targets; TREATED
+    stays terminal (honest accounting). Returns a new field (immutable). Used by mission restart."""
     return BloomField(tuple(replace(b, state=PENDING) if b.state == SKIPPED else b
                             for b in field.blooms))
 

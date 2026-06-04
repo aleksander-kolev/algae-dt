@@ -1,5 +1,8 @@
 # algae-dt — TurtleBot3 Burger digital twin
 
+> New to the codebase? **[`CODE_EXPLAINED.md`](CODE_EXPLAINED.md)** explains the whole project —
+> concepts, architecture, every node and library — in plain language, self-contained.
+
 A bidirectional digital twin for a TU/e 2IRR10 algae-bloom cleaning robot. A real TurtleBot3
 Burger and a Gazebo Harmonic twin run in parallel with state synchronisation between them. An
 operator places algae blooms on a map; the active robot navigates to each one with Nav2 (avoiding
@@ -153,9 +156,10 @@ ros2 launch algae_dt bringup.launch.py mode:=<sim_only|real_only|both> [options]
 |----------|---------|---------|
 | `mode` | `sim_only` | which world(s) to bring up (see the table at the top) |
 | `headless` | `false` | Gazebo server only, no GUI/RViz (for CI / no display) |
-| `use_rviz` | `false` | also open RViz |
+| `use_rviz` | `auto` | `auto` opens RViz in `real_only`/`both` (the **2D Pose Estimate** that seeds AMCL lives there — required) and keeps it off in `sim_only`; force with `true`/`false` |
 | `use_fake_robot` | `false` | in `real_only`/`both`, spawn the kinematic `fake_robot` so you can run those modes at home with no hardware |
-| `gz_gui` | `true` | in `sim_only`, run Gazebo's 3D client. Set `gz_gui:=false` if that window crashes on WSL — the server still renders the LiDAR. |
+| `gz_gui` | `true` | in `sim_only`/`both`, run Gazebo's 3D client. Set `gz_gui:=false` if that window crashes on WSL/weak GL — the server still renders the LiDAR (and a 3D-client crash no longer takes the launch down). |
+| `use_dynamic_obstacle` | `false` | in `sim_only`/`both`, sweep a box across the robot's path (the scripted "live environment change") |
 
 Run `both` at home, no robot required:
 

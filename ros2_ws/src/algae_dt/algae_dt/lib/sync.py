@@ -1,8 +1,8 @@
-"""Real-vs-sim synchronisation math. No ROS dependencies.
+"""Pure real<->sim synchronisation math (no ROS). Implemented TDD per PLAN T3.1 (Rubric ②).
 
 Computes the *measured* discrepancy the sync_supervisor publishes/logs and compares it against the
 documented thresholds in config/twin.yaml. Also provides the unicycle integrator for the sim_only
-"commanded shadow pose" used when there is no real robot to compare against.
+"commanded shadow pose" (so pillar ② is demonstrable without a real robot). Tests: test/test_sync.py.
 """
 from __future__ import annotations
 
