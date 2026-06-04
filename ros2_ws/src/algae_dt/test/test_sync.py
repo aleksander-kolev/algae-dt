@@ -68,6 +68,14 @@ def test_compute_builds_syncerror():
     assert math.isclose(err.dxy, 0.5) and math.isclose(err.sensor, 0.1, abs_tol=1e-9)
 
 
+def test_compute_wires_dyaw_into_syncerror():
+    """The one compute() test fed identical yaws (0,0), so dyaw=0 and its wiring into SyncError was
+    never asserted — a regression dropping dyaw would pass. Feed differing yaws and pin dyaw."""
+    err = S.compute((0.0, 0.0, 0.0), (0.0, 0.0, 0.30), 1.0, 1.0)
+    assert math.isclose(err.dyaw, 0.30, abs_tol=1e-9)
+    assert err.sensor == 0.0
+
+
 # ----------------------- commanded shadow-pose integrator ------------------
 
 def test_integrate_unicycle_straight_line():
@@ -87,3 +95,13 @@ def test_integrate_unicycle_wraps_yaw():
     _, _, yaw = S.integrate_unicycle(0.0, 0.0, math.pi - 0.1, v=0.0, omega=1.0, dt=0.3)
     assert -math.pi < yaw <= math.pi
     assert math.isclose(yaw, -(math.pi - 0.2), abs_tol=1e-9)
+
+
+def test_integrate_unicycle_curved_arc():
+    """The v!=0 AND omega!=0 branch (the exact-arc kinematics — the only nontrivial path) was never
+    exercised: prior tests were straight-line (omega=0) or in-place (v=0). A quarter circle of
+    radius 1 from the origin heading +x ends at (1,1) heading +pi/2."""
+    x, y, yaw = S.integrate_unicycle(0.0, 0.0, 0.0, v=1.0, omega=1.0, dt=math.pi / 2)
+    assert math.isclose(x, 1.0, abs_tol=1e-9)
+    assert math.isclose(y, 1.0, abs_tol=1e-9)
+    assert math.isclose(yaw, math.pi / 2, abs_tol=1e-9)

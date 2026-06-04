@@ -48,6 +48,8 @@ class Harness(Node):
         super().__init__('mediator_test_harness')
         self.cmd_vx = 0.0
         self.front_m = 3.0
+        self.emit_cmd = True            # set False to simulate the command bus going silent
+        self.emit_scan = True           # set False to simulate the LiDAR stream going stale
         self.last_cmd: TwistStamped | None = None
         self.last_safety: bool | None = None
         self.last_estop: bool | None = None
@@ -73,8 +75,10 @@ class Harness(Node):
         self.create_timer(1.0 / 30.0, self._tick)
 
     def _tick(self) -> None:
-        self.p_cmd.publish(TwistStamped(twist=_twist(self.cmd_vx)))
-        self.p_scan.publish(_make_scan(self.front_m))
+        if self.emit_cmd:
+            self.p_cmd.publish(TwistStamped(twist=_twist(self.cmd_vx)))
+        if self.emit_scan:
+            self.p_scan.publish(_make_scan(self.front_m))
         od = Odometry()
         od.header.frame_id = 'odom'
         od.pose.pose.position.x = 1.0
@@ -250,6 +254,74 @@ def test_battery_estop_latches_until_resume(world):
     assert _spin_until(ex, lambda: har.last_estop is False), "RESUME must clear the battery latch"
 
 
+def test_battery_estop_retrips_after_resume_if_still_critical(world):
+    """RESUME clears the latch, but a STILL-critical pack must immediately re-trip on the next sample
+    — RESUME cannot bypass a genuinely dead battery. The latch docstring promised this; it was never
+    exercised (the existing test only RESUMEs once the pack is healthy)."""
+    har, ex = world
+    p_batt = har.create_publisher(BatteryState, '/battery_state', 10)
+
+    def _v(v: float) -> BatteryState:
+        b = BatteryState()
+        b.voltage = float(v)
+        return b
+
+    assert _spin_until(ex, lambda: har.last_estop is False)
+    p_batt.publish(_v(10.0))
+    assert _spin_until(ex, lambda: har.last_estop is True), "critical battery must auto-E-STOP"
+    har.p_estop.publish(Bool(data=False))                # RESUME while STILL critical
+    p_batt.publish(_v(10.0))                             # next sample is still below critical
+    assert _spin_until(ex, lambda: har.last_estop is True), \
+        "a still-critical battery must re-trip after RESUME (RESUME cannot bypass a dead pack)"
+
+
+def test_invalid_battery_frame_does_not_false_trip(world):
+    """A real OpenCR voltage=0.0 / NaN bringup or serial-glitch frame must NOT latch a phantom
+    battery E-STOP on a healthy pack."""
+    har, ex = world
+    p_batt = har.create_publisher(BatteryState, '/battery_state', 10)
+    assert _spin_until(ex, lambda: har.last_estop is False)
+    b = BatteryState()
+    b.voltage = 0.0
+    p_batt.publish(b)
+    _spin_until(ex, lambda: False, secs=0.6)
+    assert har.last_estop is False, "a 0.0 V bringup frame must not auto-E-STOP a healthy pack"
+
+
+def test_stale_scan_fail_safe_blocks_at_node_level(world):
+    """The single most safety-critical behavior, wired end-to-end (not just the pure-lib gate): a
+    clear path passes; when the LiDAR stream goes STALE (no /scan for max_data_age_s) the mediator
+    must treat it as an obstacle — /dt/safety True and forward motion zeroed — and recover when scan
+    resumes. (test_safety pins the pure gate; this pins _scan_t flowing into it inside the node.)"""
+    har, ex = world
+    har.front_m = 3.0
+    har.cmd_vx = 0.2
+    assert _spin_until(ex, lambda: har.last_safety is False
+                       and har.last_cmd is not None and abs(har.last_cmd.twist.linear.x - 0.2) < 1e-6), \
+        "clear, fresh scan -> forward passes, not blocked"
+    har.emit_scan = False                                 # the LiDAR stream stops (stale)
+    assert _spin_until(ex, lambda: har.last_safety is True
+                       and har.last_cmd is not None and har.last_cmd.twist.linear.x == 0.0, secs=4.0), \
+        "a stale scan must fail-safe: /dt/safety True and forward motion zeroed"
+    har.emit_scan = True                                  # LiDAR recovers
+    assert _spin_until(ex, lambda: har.last_safety is False, secs=4.0), \
+        "a fresh clear scan must clear the fail-safe block"
+
+
+def test_bus_silent_command_watchdog_stops(world):
+    """Safety watchdog: if the command bus goes SILENT (teleop/Nav2 died), the mediator must stop the
+    robot after max_cmd_age_s even on a clear path — a stale last command must never keep driving."""
+    har, ex = world
+    har.front_m = 3.0
+    har.cmd_vx = 0.2
+    assert _spin_until(ex, lambda: har.last_cmd is not None
+                       and abs(har.last_cmd.twist.linear.x - 0.2) < 1e-6), "command passes through"
+    har.emit_cmd = False                                  # the bus goes silent
+    assert _spin_until(ex, lambda: har.last_cmd is not None
+                       and har.last_cmd.twist.linear.x == 0.0, secs=4.0), \
+        "a silent command bus must zero forward motion after max_cmd_age_s (watchdog)"
+
+
 def test_sim_battery_override_forces_the_auto_estop_demo_beat(world):
     """The sim_only synthetic battery floors ABOVE critical by design, so the DEMO_SCRIPT
     battery->auto-E-STOP beat is triggered via /dt/battery_override_v; <=0 clears the override."""
@@ -262,6 +334,32 @@ def test_sim_battery_override_forces_the_auto_estop_demo_beat(world):
                      and har.last_health is not None
                      and abs(har.last_health.voltage - 10.0) < 1e-6, secs=5.0)
     assert ok, "the override must drive /dt/health AND trip the latched auto-E-STOP"
+
+
+def test_real_mode_starts_estop_held_until_first_healthy_battery():
+    """REGRESSION (mediator restart latch): a real-mode mediator must start /dt/estop HELD (True) so
+    a RESTART cannot silently un-latch a prior battery E-STOP; the hold releases only when the first
+    valid healthy /battery_state arrives."""
+    rclpy.init()
+    med = TwinMediator(parameter_overrides=[Parameter('mode', Parameter.Type.STRING, 'real_only')])
+    har = Harness()
+    p_batt = har.create_publisher(BatteryState, '/battery_state', 10)
+    ex = SingleThreadedExecutor()
+    ex.add_node(med)
+    ex.add_node(har)
+    try:
+        assert _spin_until(ex, lambda: har.last_estop is True), \
+            "a real-mode mediator must start E-STOP HELD (fail-safe across a restart)"
+        b = BatteryState()
+        b.voltage = 12.0
+        p_batt.publish(b)
+        assert _spin_until(ex, lambda: har.last_estop is False), \
+            "the first valid healthy battery sample must release the startup hold"
+    finally:
+        ex.shutdown()
+        med.destroy_node()
+        har.destroy_node()
+        rclpy.shutdown()
 
 
 def test_both_mode_sim_pose_lifted_to_map_frame_via_tf():

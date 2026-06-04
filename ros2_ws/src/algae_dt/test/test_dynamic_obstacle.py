@@ -85,7 +85,8 @@ def test_rejects_unsafe_entity_name():
 def test_keepout_clamps_an_amplitude_that_would_sweep_the_robot_spawn():
     """The <static> box is TELEPORTED (no collision response): a sweep along x about (0.6,0)
     +/-0.6 m passes straight through the robot spawn (0,0). The amplitude must be clamped so the
-    swept segment keeps >= keepout_radius_m clearance (0.6 - 0.3 = 0.3)."""
+    swept segment keeps the EFFECTIVE keep-out (radius 0.30 + box half-extent 0.15 = 0.45) clear:
+    0.6 - 0.45 = 0.15."""
     rclpy.init()
     try:
         node = DynamicObstacle(parameter_overrides=[
@@ -93,8 +94,8 @@ def test_keepout_clamps_an_amplitude_that_would_sweep_the_robot_spawn():
             Parameter('axis', Parameter.Type.STRING, 'x'),
             Parameter('amplitude', Parameter.Type.DOUBLE, 0.6),
         ])
-        assert abs(node.amplitude - 0.30) < 1e-6, \
-            f"amplitude must be clamped to keep the 0.30 m keep-out (got {node.amplitude})"
+        assert abs(node.amplitude - 0.15) < 1e-6, \
+            f"amplitude must be clamped to keep the 0.45 m effective keep-out (got {node.amplitude})"
         assert not node._refused
         node.destroy_node()
     finally:
@@ -142,6 +143,56 @@ def test_set_pose_failure_rearms_spawn():
             node._tick()
         assert len(creates) >= 2, \
             "repeated set_pose failures must re-arm the spawn and re-create the obstacle, not freeze"
+        node.destroy_node()
+    finally:
+        rclpy.shutdown()
+
+
+def test_box_half_extent_inflates_the_keepout():
+    """The teleported box is 0.3 m wide, not a point: with keepout 0.30 + half-extent 0.15 the
+    EFFECTIVE keep-out is 0.45 m, so a centre 0.40 m from the spawn (clear of the 0.30 m radius but
+    not of the box's 0.15 m half-extent) must be REFUSED, not spawned with a point-model clamp."""
+    rclpy.init()
+    try:
+        node = DynamicObstacle(parameter_overrides=[
+            Parameter('center_x', Parameter.Type.DOUBLE, 0.40),
+            Parameter('center_y', Parameter.Type.DOUBLE, 0.0),
+            Parameter('axis', Parameter.Type.STRING, 'x'),
+            Parameter('keepout_radius_m', Parameter.Type.DOUBLE, 0.30),
+            Parameter('box_half_extent_m', Parameter.Type.DOUBLE, 0.15),
+        ])
+        assert node._refused is True, "a centre within radius+half-extent of the spawn must refuse"
+        assert node.do_spawn is False
+        node.destroy_node()
+    finally:
+        rclpy.shutdown()
+
+
+def test_set_pose_failure_counter_resets_on_success():
+    """A confirmed-spawned obstacle's set_pose failure counter must RESET on the next success, so a
+    transient failure does not march the node toward a needless re-spawn (only a SUSTAINED run of
+    failures re-creates the box). The reset-on-success path had no coverage."""
+    rclpy.init()
+    try:
+        node = DynamicObstacle(parameter_overrides=[
+            Parameter('spawn', Parameter.Type.BOOL, True),
+            Parameter('obstacle_name', Parameter.Type.STRING, 'algae_obstacle'),
+        ])
+        set_pose_ok = {'v': True}
+
+        def fake_gz(service, reqtype, req, timeout_ms=300):
+            if service.endswith('/create'):
+                return True
+            return set_pose_ok['v']
+        node._gz = fake_gz
+        node._tick()                       # spawn confirmed + first set_pose ok
+        assert node._spawned
+        set_pose_ok['v'] = False
+        node._tick(); node._tick()         # two failures (< _SET_POSE_REFRESH_AFTER)
+        assert node._set_pose_fails == 2 and node._spawned, "a few failures must not re-spawn"
+        set_pose_ok['v'] = True
+        node._tick()                       # a success resets the counter
+        assert node._set_pose_fails == 0 and node._spawned, "success must reset the failure counter"
         node.destroy_node()
     finally:
         rclpy.shutdown()

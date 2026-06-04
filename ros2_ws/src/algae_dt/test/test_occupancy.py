@@ -147,3 +147,29 @@ def test_reachable_goal_offmap_negative_band_returns_none():
     mi = _map_info()
     assert occupancy.reachable_goal(grid, mi, -0.02, -0.02,
                                     clearance_m=0.10, max_projection_m=0.25) is None
+
+
+def test_reachable_goal_nonfinite_target_returns_none():
+    """A non-finite goal coordinate is the degenerate 'off-map' case: it must return None (the
+    documented contract), not raise — geometry.world_to_pixel would throw on floor(NaN/inf)."""
+    grid = _grid(["." * 20] * 20)
+    mi = _map_info()
+    for bad in (float('nan'), float('inf'), float('-inf')):
+        assert occupancy.reachable_goal(grid, mi, bad, 0.5, clearance_m=0.1, max_projection_m=0.25) is None
+        assert occupancy.reachable_goal(grid, mi, 0.5, bad, clearance_m=0.1, max_projection_m=0.25) is None
+
+
+def test_reachable_goal_cap_rejects_existing_but_too_far_clear_cell():
+    """The projection cap must be a TRUE upper bound: when the only clearance-satisfying cell exists
+    but lies beyond max_projection_m, the bloom is skipped (None), not chased. Prior 'bounded' tests
+    realized only a 0.15 m move against a 0.40 m cap, so a broken/absent cap would have passed."""
+    # left 10 columns are wall; a target buried at col 2 needs a big push to reach clearance.
+    rows = ["#" * 10 + "." * 10 for _ in range(20)]
+    grid = _grid(rows)
+    mi = _map_info()                                   # 0.05 m/px
+    tx, ty = geometry.pixel_to_world(2, 10, mi)
+    # tight cap (0.10 m = 2 px) cannot reach the clear interior -> None
+    assert occupancy.reachable_goal(grid, mi, tx, ty, clearance_m=0.15, max_projection_m=0.10) is None
+    # generous cap (0.80 m = 16 px) can reach it -> a real projected goal
+    out = occupancy.reachable_goal(grid, mi, tx, ty, clearance_m=0.15, max_projection_m=0.80)
+    assert out is not None and out[0] > tx

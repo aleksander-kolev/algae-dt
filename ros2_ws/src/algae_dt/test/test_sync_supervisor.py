@@ -145,6 +145,13 @@ def test_csv_evidence_written_with_columns(world):
         lines = f.read().strip().splitlines()
     assert lines[0] == metrics.csv_header()
     assert len(lines) >= 2          # header + at least one data row
+    # validate an actual DATA-ROW VALUE, not just that rows exist: the fed sim pose is 3 cm off, so
+    # the dxy_m column must read ~0.03 (a row of zeros / a frozen value would slip past a count check).
+    cols = metrics.csv_header().split(',')
+    dxy_i = cols.index('dxy_m')
+    dxys = [float(r.split(',')[dxy_i]) for r in lines[1:] if r.split(',')[dxy_i]]
+    assert dxys and any(abs(d - 0.03) < 0.01 for d in dxys), \
+        f"a CSV data row must carry the measured dxy ~0.03, got {dxys[:5]}"
 
 
 def test_missing_world_fails_loud(world):
@@ -251,8 +258,9 @@ def _pump_for(ex, secs: float) -> None:
 def test_both_mode_stop_skew_alerts_when_over_budget(tmp_path):
     """The documented stop_skew_ms tolerance is loaded, compared, and alerted on a safety event in
     `both` mode (F3); and the pending stop-skew is consumed one-shot even with the CSV disabled (F4).
-    Stop times are taken on the SUPERVISOR's clock at arrival, so the skew is forced by ACTUALLY
-    delaying the sim stop by ~0.2 s of wall time (not by fabricating header stamps)."""
+    Realistic ordering: the gate publishes /dt/safety FIRST (arming the measurement), then the two
+    worlds decelerate and stop — here the sim stop is delayed ~0.2 s of WALL time after the real one,
+    forcing |skew| ~200 ms > the 50 ms budget (measured on the supervisor's own arrival clock)."""
     rclpy.init()
     sup = SyncSupervisor(parameter_overrides=[
         Parameter('mode', Parameter.Type.STRING, 'both'),
@@ -269,11 +277,11 @@ def test_both_mode_stop_skew_alerts_when_over_budget(tmp_path):
         har.p_aodom.publish(_stamped_odom(0.3, 100.0))  # real moving
         har.p_sodom.publish(_stamped_odom(0.3, 100.0))  # sim moving
         _pump(ex, 15)
-        har.p_aodom.publish(_stamped_odom(0.0, 100.1))  # real STOPS now...
+        har.p_safety.publish(Bool(data=True))           # gate blocks FIRST -> arm the measurement
+        _pump(ex, 5)
+        har.p_aodom.publish(_stamped_odom(0.0, 100.1))  # real comes to rest now...
         _pump_for(ex, 0.20)                             # ...the sim stops ~200 ms of WALL time later
         har.p_sodom.publish(_stamped_odom(0.0, 100.0))  # -> |skew| ~200 ms > 50 budget
-        _pump(ex, 15)
-        har.p_safety.publish(Bool(data=True))           # safety edge captures the skew
         got = _spin_until(ex, lambda: 'STOP-SKEW' in (har.last_alert or ''), secs=4.0)
         assert got, "stop-skew over the documented budget must raise /dt/alerts (F3)"
         _pump(ex, 10)
@@ -290,8 +298,8 @@ def test_both_mode_stop_skew_immune_to_clock_domain_mismatch(tmp_path):
     """REGRESSION (the headline both-mode bug): the real robot stamps odom with the Pi's WALL clock
     (~1.7e9 s) while the gz bridge stamps /sim/odom with SIM time (~seconds). Differencing those
     header stamps made every stop_skew astronomically over budget. Measured on the supervisor's own
-    arrival clock, two near-simultaneous stops must produce NO stop-skew alert despite header stamps
-    from wildly different clock domains."""
+    arrival clock, two near-simultaneous post-block stops must produce NO stop-skew alert despite
+    header stamps from wildly different clock domains."""
     rclpy.init()
     sup = SyncSupervisor(parameter_overrides=[
         Parameter('mode', Parameter.Type.STRING, 'both'),
@@ -305,16 +313,62 @@ def test_both_mode_stop_skew_immune_to_clock_domain_mismatch(tmp_path):
     ex.add_node(har)
     try:
         _pump(ex, 15)
-        har.p_aodom.publish(_stamped_odom(0.3, 1.7e9))      # real: epoch wall-clock stamps
-        har.p_sodom.publish(_stamped_odom(0.3, 5.0))        # sim: small sim-time stamps
+        har.p_aodom.publish(_stamped_odom(0.3, 1.7e9))      # real moving: epoch wall-clock stamps
+        har.p_sodom.publish(_stamped_odom(0.3, 5.0))        # sim moving: small sim-time stamps
         _pump(ex, 15)
+        har.p_safety.publish(Bool(data=True))               # arm
+        _pump(ex, 5)
         har.p_aodom.publish(_stamped_odom(0.0, 1.7e9 + 0.1))   # both stop (near-)simultaneously
         har.p_sodom.publish(_stamped_odom(0.0, 5.1))
-        _pump(ex, 15)
-        har.p_safety.publish(Bool(data=True))
         _pump_for(ex, 1.0)                                  # give the tick time to (not) alert
         assert 'STOP-SKEW' not in (har.last_alert or ''), \
             "near-simultaneous stops must not alert just because header clock domains differ"
+    finally:
+        ex.shutdown()
+        sup.destroy_node()
+        har.destroy_node()
+        rclpy.shutdown()
+
+
+def test_stop_skew_ignores_unrelated_pre_block_stops(tmp_path):
+    """REGRESSION (the swarm finding): stop times used to be recorded on EVERY odom stop and never
+    reset, so a safety block differenced two arbitrary OLD stops. Here both worlds first make a
+    NON-safety stop 0.5 s apart (a waypoint pause), then resume, then a real safety block stops them
+    near-simultaneously. The pre-block 0.5 s gap must be IGNORED (only post-block stops count), so no
+    STOP-SKEW alert fires against the 0.30 s budget — the old code would have alerted on the 0.5 s."""
+    rclpy.init()
+    sup = SyncSupervisor(parameter_overrides=[
+        Parameter('mode', Parameter.Type.STRING, 'both'),
+        Parameter('stop_skew_ms', Parameter.Type.DOUBLE, 300.0),
+        Parameter('sync_log_enable', Parameter.Type.BOOL, False),
+        Parameter('sync_log_dir', Parameter.Type.STRING, str(tmp_path)),
+    ])
+    har = BothHarness()
+    ex = SingleThreadedExecutor()
+    ex.add_node(sup)
+    ex.add_node(har)
+    try:
+        _pump(ex, 15)
+        har.p_aodom.publish(_stamped_odom(0.3, 1.0))    # both moving
+        har.p_sodom.publish(_stamped_odom(0.3, 1.0))
+        _pump(ex, 10)
+        # --- unrelated NON-safety stop, 0.5 s apart, with NO block armed -> must be ignored ---
+        har.p_aodom.publish(_stamped_odom(0.0, 2.0))    # real waypoint-stops
+        _pump_for(ex, 0.50)
+        har.p_sodom.publish(_stamped_odom(0.0, 2.0))    # sim waypoint-stops 0.5 s later
+        _pump(ex, 10)
+        # --- both resume ---
+        har.p_aodom.publish(_stamped_odom(0.3, 3.0))
+        har.p_sodom.publish(_stamped_odom(0.3, 3.0))
+        _pump(ex, 10)
+        # --- NOW a real safety block; both stop near-simultaneously after it ---
+        har.p_safety.publish(Bool(data=True))
+        _pump(ex, 5)
+        har.p_aodom.publish(_stamped_odom(0.0, 4.0))
+        har.p_sodom.publish(_stamped_odom(0.0, 4.0))
+        _pump_for(ex, 1.0)
+        assert 'STOP-SKEW' not in (har.last_alert or ''), \
+            "pre-block unrelated stops must not pollute the safety event's skew"
     finally:
         ex.shutdown()
         sup.destroy_node()

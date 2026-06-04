@@ -61,6 +61,11 @@
                                   # + DDS/Wi-Fi over AP2IRR10; >250 ms means a real desync to flag.
     stop_skew_ms: 300.0           # max allowed real-stop vs sim-stop time skew on a safety event
                                   # (Rubric ③ "synchronous" — measured, logged to CSV, AND alerted).
+    stop_skew_window_s: 2.0       # a safety-event stop-skew is measured ONLY between the block's
+                                  # rising edge and BOTH worlds coming to rest within this window.
+                                  # If a world never stops in time the measurement is abandoned (no
+                                  # fabricated number) — this is what keeps the skew tied to the stop
+                                  # the block actually caused, never an old/unrelated stop pair.
     sync_pose_timeout_s: 2.0      # if a REQUIRED pose stream is silent/stale this long, the
                                   # supervisor fails loud (sync_ok False + /dt/alerts) rather than
                                   # going dark. Required = real always; sim only in sim_only/both
@@ -90,6 +95,11 @@
                                       # as /dt/real_pose (the sim_only sync source); none => no shadow.
 
     # --- operator console liveness ---
+    gui_alert_hold_s: 0.0          # how long (wall s) the console holds an alert banner RED after
+                                   # the last /dt/alerts message. 0 = auto = max(10, 3*alert_repeat_s),
+                                   # which keeps a persistent alert visible across the worst
+                                   # documented sim real-time-factor (the producer republishes on SIM
+                                   # time, the GUI ages on WALL time). Set >0 to pin an explicit hold.
     gui_stale_after_s: 2.0         # /dt/safety doubles as the mediator heartbeat (republished every
                                    # command tick at cmd_rate_hz); silent longer than this -> the
                                    # console's SAFETY/E-STOP banners read UNKNOWN (DT LINK LOST) and
@@ -149,6 +159,9 @@
     keepout_radius_m: 0.30         # the <static> box is TELEPORTED (no collision response), so its
                                    # sweep is clamped to keep this clearance from the robot spawn
                                    # (0,0); a centre inside the keep-out refuses to spawn at all.
+    box_half_extent_m: 0.15        # obstacle_box.sdf is a 0.3 m box -> 0.15 m half-extent. The
+                                   # keep-out is inflated by this so the box FACE (not just its
+                                   # dimensionless centre) stays outside keepout_radius_m of (0,0).
 
     # --- map (course mapFiles.zip base map; verified 86x110 @ 0.05 m/px) ---
     map_resolution: 0.05

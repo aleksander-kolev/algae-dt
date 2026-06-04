@@ -171,11 +171,17 @@ if [ "$MODE" = both ]; then
     In RViz set "2D Pose Estimate" on the robot's real spot before starting a mission.
 
 EOF
-  # ---- robot reachable (advisory fast-fail; the authoritative gate is /scan in the payload) ----
-  ping -c1 -W2 "$ROBOT_IP" >/dev/null 2>&1 \
-    || die "robot $ROBOT_IP not reachable — 'both' needs the real robot. Power it on, start the Pi bringup, join Wi-Fi AP2IRR10, then re-run.
-         For the hardware-free fallback demo instead (a valid graded sim_only demo):  $0 --sim"
-  log OK "robot $ROBOT_IP reachable"
+  # ---- robot reachable: ADVISORY only. ROS 2 reachability != ICMP reachability — on a congested
+  #      shared AP2IRR10 (cold ARP + first round-trip > 2 s) or a Pi/firewall that drops ICMP echo,
+  #      ping fails while DDS works fine. The AUTHORITATIVE gate is the /scan check inside the payload
+  #      (exit 5 after a 40 s wait), so a failed ping only WARNS — it must not abort a usable demo. ----
+  if ping -c2 -W3 "$ROBOT_IP" >/dev/null 2>&1; then
+    log OK "robot $ROBOT_IP reachable (ICMP)"
+  else
+    log WARN "robot $ROBOT_IP did not answer ICMP ping — continuing anyway (DDS can work when ICMP"
+    log WARN "  doesn't; the authoritative /scan check inside the container/native payload decides)."
+    log WARN "  If the robot really is off: power it on + start the Pi bringup, or use  $0 --sim"
+  fi
 else
   log INFO "sim_only fallback: skipping the robot reachability check (no hardware needed)."
 fi
@@ -227,7 +233,7 @@ if [ "$RUNTIME" = native ]; then
   # =========================== NATIVE (no Docker — the lab PC as found 2026-06) ===========================
   [ -n "${DISPLAY:-}" ] || log WARN "DISPLAY is empty — Gazebo/RViz/the GUI need a graphical session"
   log INFO "launching mode:=$MODE NATIVELY (Ctrl-C to stop)"
-  echo "   teleop in another terminal:  bash -lc 'source /opt/ros/jazzy/setup.bash; source ~/turtlebot3_ws/install/setup.bash; export ROS_DOMAIN_ID=$DOMAIN; ros2 run turtlebot3_teleop teleop_keyboard --ros-args -r /cmd_vel:=/dt/cmd_vel_raw'" >&2
+  echo "   teleop in another terminal:  bash -lc 'source /opt/ros/jazzy/setup.bash; source ~/turtlebot3_ws/install/setup.bash; export ROS_DOMAIN_ID=$DOMAIN ROS_LOCALHOST_ONLY=0; ros2 run turtlebot3_teleop teleop_keyboard --ros-args -r /cmd_vel:=/dt/cmd_vel_raw'" >&2
   echo >&2
   # ROS_LOCALHOST_ONLY=0: a leftover =1 in the operator's shell would confine DDS to loopback and
   # make the robot's /scan invisible with a misleading diagnosis — neutralize it explicitly.

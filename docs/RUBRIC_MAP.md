@@ -40,8 +40,9 @@ digital→real arrows are demonstrable at home without a robot.
 ### ② State synchronization & tolerances — 4 pts  (course row: "Real-Time Synchronization and Tolerances")
 **Deliverable:** `sync_supervisor` — the part most teams skip; we make it first-class.
 - Real-time pose sync real↔sim (mirror real pose into sim; both follow the DT command bus).
-- **Measured** `/dt/sync_error` (Δxy, Δyaw, sensor delta) and `/dt/latency_ms` (command→motion, scan
-  age) — *numbers, published & logged to CSV*.
+- **Measured** `/dt/sync_error` (Δxy, Δyaw, sensor delta) and `/dt/latency_ms` (command→motion
+  onset) — *numbers, published & logged to CSV*. (Scan age is gated separately by the mediator's
+  staleness budget; `/dt/latency_ms` carries the command→motion figure only.)
 - **Documented tolerance thresholds + rationale** in `config/twin.yaml` (`tol_pose_xy_m`,
   `latency_budget_ms`, `stop_skew_ms`…).
 - **Alerts/logging when out of tolerance:** `/dt/alerts` (String) + CSV row + GUI banner amber/red.
@@ -82,7 +83,7 @@ critical battery. Demoed explicitly.
 | Course step | Our deliverable | Evidence |
 |---|---|---|
 | Setup & Familiarization | `docs/SETUP.md`, container builds, basic teleop | build log; teleop moves sim |
-| Simulation Setup | `turtlebot3_gazebo` + `algae_arena.world` + RViz + `/sim/scan` | sim runs; scan in RViz |
+| Simulation Setup | `turtlebot3_gazebo` + `algae_arena.world` + RViz + `/scan` (bare in sim_only; `/sim/scan` is `both`-only) | sim runs; scan in RViz |
 | DT Integration Node (fan-in/fan-out) | `twin_mediator` | topic graph; both-direction echo |
 | Real-Time Sync & Tolerances | `sync_supervisor` + CSV + `/dt/alerts` | metrics CSV; alert on cue |
 | Obstacle Detection & Avoidance | dual-scan gate + Nav2 | both stop; reroute |

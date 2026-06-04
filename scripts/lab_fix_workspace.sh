@@ -326,6 +326,19 @@ for want in turtlebot3_msgs turtlebot3_description turtlebot3_gazebo turtlebot3_
             turtlebot3_bringup turtlebot3_teleop algae_dt; do
   echo "$INVENTORY" | grep -qx "$want" || log WARN "expected package NOT in src/: $want (the archive may be incomplete)"
 done
+# HARD GATE: a turtlebot3_ws MUST contain the stock stack. The algae-dt repo zip (only
+# ros2_ws/src/algae_dt) ALSO passes the package.xml filter, so find_archive_in_downloads could
+# auto-pick it and "recover" a workspace that has algae_dt but none of turtlebot3 — then the
+# success banner + 'ros2 launch algae_dt bringup.launch.py' fails at lab time. turtlebot3_msgs is
+# the canonical marker: a core package present in EVERY turtlebot3_ws but absent from the algae-dt
+# repo zip. Refuse loudly rather than declare victory on the wrong archive. (Bypass intentionally
+# NOT offered: a workspace with no turtlebot3 stack is never a valid turtlebot3_ws recovery.)
+if [ -n "$INVENTORY" ] && ! echo "$INVENTORY" | grep -qx turtlebot3_msgs; then
+  die "this archive is NOT a turtlebot3_ws — it has no turtlebot3 stack (turtlebot3_msgs missing).
+     Found only: $(echo "$INVENTORY" | tr '\n' ' ')
+     You probably picked the algae-dt REPO zip, not the workspace fail-safe zip. Pass the real
+     workspace archive explicitly:  $0 --zip /path/to/<turtlebot3_ws>.zip"
+fi
 
 # ---------------------------------------------------------------------------- 7. repair ~/.bashrc
 MARK_START='# >>> algae-dt lab_fix_workspace >>>'
@@ -337,10 +350,14 @@ repair_rc() {
   tmp="$(mktemp "$rc.XXXXXX")"
   # 1) drop any previous managed block (idempotent re-runs)
   awk -v s="$MARK_START" -v e="$MARK_END" '$0==s{skip=1} !skip{print} $0==e{skip=0}' "$rc" > "$tmp"
-  # 2) comment out lines that still point at broken paths
+  # 2) comment out lines that still point at broken paths. Static broken-path substrings are matched
+  #    anywhere; quarantined dir BASENAMES are matched only at a PATH boundary (followed by '/' or at
+  #    end-of-line) so a name like 'turtlebot3_ws_old' can't disable an unrelated line such as
+  #    `export PROJ=turtlebot3_ws_old_notes` (silent, hard-to-debug breakage on a wiped laptop).
   local patterns=("/home/test/turtlebot3_ws" "turtlebot3_ws (")
+  local qpatterns=()
   local q; for q in "${QUARANTINED_NAMES[@]:-}"; do
-    [ -n "$q" ] && [ "$q" != "turtlebot3_ws" ] && patterns+=("$q")
+    [ -n "$q" ] && [ "$q" != "turtlebot3_ws" ] && qpatterns+=("$q")
   done
   local out; out="$(mktemp "$rc.XXXXXX")"
   while IFS= read -r line || [ -n "$line" ]; do
@@ -350,6 +367,11 @@ repair_rc() {
       for p in "${patterns[@]}"; do
         [[ "$line" == *"$p"* ]] && { hit=true; break; }
       done
+      if ! $hit; then
+        for p in "${qpatterns[@]}"; do
+          [[ "$line" == *"$p/"* || "$line" == *"$p" ]] && { hit=true; break; }
+        done
+      fi
     fi
     if $hit; then
       printf '# [disabled by lab_fix_workspace %s] %s\n' "$TS" "$line" >> "$out"
@@ -429,19 +451,27 @@ $VERIFY_FAILED && exit 5
 # ---------------------------------------------------------------------------- summary
 echo >&2
 log DONE "workspace recovered at $WS"
-if [ ${#QUARANTINED_NAMES[@]} -gt 0 ]; then
-  if $PURGE_QUARANTINE; then
-    for d in "$HOME"/turtlebot3_ws.broken."$TS"*; do
-      chmod -R u+rwX -- "$d" 2>/dev/null || true
-      if rm -rf -- "$d" 2>/dev/null; then
-        log OK "purged quarantine: $d"
-      else
-        log WARN "could not fully delete $d (foreign-owned files need a TA with sudo; it only costs disk space meanwhile)"
-      fi
-    done
-  else
-    log INFO "old dir(s) kept as ~/turtlebot3_ws.broken.$TS* — delete later with --purge-quarantine (or ask a TA if rm fails)"
-  fi
+# --purge-quarantine removes ALL turtlebot3_ws.broken.* dirs (not just THIS run's $TS) — the
+# multi-GB disk hog on the factory-reset lab laptop is usually an EARLIER run's quarantine. Runs
+# standalone too (this invocation may have quarantined nothing). Without the flag, just point at it.
+if $PURGE_QUARANTINE; then
+  purged_any=false
+  shopt -s nullglob
+  for d in "$HOME"/turtlebot3_ws.broken.*; do
+    [ -d "$d" ] || continue
+    purged_any=true
+    chmod -R u+rwX -- "$d" 2>/dev/null || true
+    if rm -rf -- "$d" 2>/dev/null; then
+      log OK "purged quarantine: $d"
+    else
+      log WARN "could not fully delete $d (foreign-owned files need a TA with sudo; costs disk meanwhile)"
+    fi
+  done
+  shopt -u nullglob
+  $purged_any || log INFO "--purge-quarantine: no turtlebot3_ws.broken.* dirs to remove"
+elif [ ${#QUARANTINED_NAMES[@]} -gt 0 ]; then
+  log INFO "old dir(s) kept as ~/turtlebot3_ws.broken.$TS* — reclaim space later with --purge-quarantine"
+  log INFO "  (that removes ALL turtlebot3_ws.broken.* dirs, including earlier runs'; ask a TA if rm fails)"
 fi
 cat >&2 <<EOF
 

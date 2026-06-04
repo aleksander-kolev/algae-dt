@@ -12,6 +12,9 @@ INF = float('inf')
 def test_latency_ms_sign_and_value():
     assert M.latency_ms(1.0, 1.25) == 250.0
     assert M.latency_ms(2.0, 2.0) == 0.0
+    # discriminate the SIGN: motion observed BEFORE the command is negative latency; a
+    # sign-stripping (abs) regression would return +500 here and the old asserts wouldn't catch it.
+    assert M.latency_ms(2.0, 1.5) == -500.0
 
 
 def test_csv_header_columns():

@@ -277,6 +277,32 @@ def test_bridge_link_liveness_tracks_dt_safety():
         rclpy.shutdown()
 
 
+def test_refresh_paints_estop_engaged_banner():
+    """The latched E-STOP state must surface on the console: with a live DT link, /dt/estop True
+    paints 'E-STOP: ENGAGED' (red) and False paints 'clear'. The inbound estop -> banner path was
+    never exercised."""
+    from PyQt5 import QtWidgets
+    from std_msgs.msg import Bool as _Bool
+    rclpy.init()
+    bridge = GuiBridge()
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    win = operator_gui._make_window(bridge)
+    try:
+        win._spin.stop()
+        win._repaint.stop()
+        bridge._on_safety(_Bool(data=False))              # heartbeat -> link is live (not stale)
+        bridge._on_estop(_Bool(data=True))
+        win._refresh()
+        assert win.banners['estop'].text() == 'E-STOP: ENGAGED', "latched E-STOP must read ENGAGED"
+        bridge._on_safety(_Bool(data=False))
+        bridge._on_estop(_Bool(data=False))
+        win._refresh()
+        assert win.banners['estop'].text() == 'E-STOP: clear'
+    finally:
+        bridge.destroy_node()
+        rclpy.shutdown()
+
+
 def test_refresh_paints_unknown_banners_when_link_lost():
     """With the DT link stale, the SAFETY/E-STOP banners must read UNKNOWN — DT LINK LOST instead
     of the last (green) values; once the heartbeat arrives they return to the real state."""

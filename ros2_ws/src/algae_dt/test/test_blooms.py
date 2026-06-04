@@ -62,6 +62,15 @@ def test_nearest_untreated_returns_closest_pending():
     assert B.nearest_untreated(f, 0.0, 0.0).id == 0
 
 
+def test_nearest_untreated_actually_uses_distance_not_insertion_order():
+    """Discriminating: a distance-blind impl (e.g. 'return first non-terminal') passes every other
+    nearest test because the closer bloom is added first. Add the FAR bloom first so insertion
+    order and distance disagree — the query point near the second bloom must pick the second."""
+    f = _field((5.0, 0.0), (1.0, 0.0))       # id0 far, id1 near, in insertion order
+    assert B.nearest_untreated(f, 1.0, 0.0).id == 1, "must select by distance, not insertion order"
+    assert B.nearest_untreated(f, 4.0, 0.0).id == 0, "from near id0 it must pick id0"
+
+
 def test_nearest_untreated_skips_terminal_states():
     f = _field((1.0, 0.0), (5.0, 0.0))
     f = B.mark_treated(f, 0)                    # nearest is now terminal

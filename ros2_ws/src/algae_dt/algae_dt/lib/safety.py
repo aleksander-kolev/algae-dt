@@ -98,8 +98,13 @@ class ScanStatus:
 def limit_command(vx: float, wz: float, *, blocked: bool, estop: bool,
                   max_linear: float, max_angular: float) -> tuple[float, float]:
     """Shape one commanded (vx, wz) for output: full-stop on E-STOP, clamp to the Burger limits,
-    and zero FORWARD motion when the safety gate blocks (rotation and reverse still allowed)."""
-    if estop:
+    and zero FORWARD motion when the safety gate blocks (rotation and reverse still allowed).
+
+    FAIL-SAFE on a non-finite command: `min(max_linear, NaN)` returns `max_linear` and
+    `max(-max_linear, max_linear)` returns `max_linear`, so an unvalidated NaN/inf from a degenerate
+    Nav2 plan or a teleop glitch would be AMPLIFIED to FULL throttle when the gate is clear. A
+    garbage command must STOP the robot, never drive it — treat any non-finite component as estop."""
+    if estop or not (math.isfinite(vx) and math.isfinite(wz)):
         return 0.0, 0.0
     vx = max(-max_linear, min(max_linear, vx))
     wz = max(-max_angular, min(max_angular, wz))

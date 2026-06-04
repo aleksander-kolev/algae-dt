@@ -67,3 +67,28 @@ def test_parse_real_course_map():
     assert (img.width, img.height) == (86, 110)
     assert img.maxval == 255
     assert len(img.pixels) == 86 * 110
+
+
+def test_parse_p5_crlf_header_does_not_shift_body():
+    """A spec-valid PGM saved on Windows ends header lines in CRLF. Hard-coding body_start=pos+1
+    landed the body on the leftover '\\n', shifting every pixel and dropping the last (e.g.
+    [10,10,20,30] instead of [10,20,30,40]). The map source feeds the GUI canvas + occupancy."""
+    data = b"P5\r\n2 2\r\n255\r\n" + bytes([10, 20, 30, 40])
+    img = pgm.parse(data)
+    assert img.pixels == bytes([10, 20, 30, 40])
+
+
+def test_parse_p5_comment_after_maxval_is_not_read_as_pixels():
+    """PNM allows a comment after any header token; GIMP/hand-edited maps place one right after
+    maxval. The old offset read the comment text ' c\\n' + first byte as pixels."""
+    data = b"P5\n2 2\n255# editor note\n" + bytes([1, 2, 3, 4])
+    img = pgm.parse(data)
+    assert img.pixels == bytes([1, 2, 3, 4])
+
+
+def test_parse_p2_scales_when_maxval_not_255():
+    """The P2 ascii maxval-scaling branch (only P5 scaling was covered)."""
+    data = b"P2\n1 2\n100\n50 100\n"
+    img = pgm.parse(data)
+    assert img.maxval == 255
+    assert img.pixels == bytes([50 * 255 // 100, 255])   # -> [127, 255]

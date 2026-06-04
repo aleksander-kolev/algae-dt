@@ -555,6 +555,47 @@ def test_spray_completes_on_a_slow_sim_that_keeps_progressing():
         _teardown(runner, har, ex)
 
 
+def test_estop_midnav_publishes_terminal_mission_state():
+    """REGRESSION: E-STOP set _running=False but published NO mission_state, so the worker broke out
+    leaving /dt/mission_state stuck at 'navigating:0' forever — the GUI banner then lied that the
+    mission was still running. The rising E-STOP edge must publish a terminal state ('estopped')."""
+    runner, har, ex = _build(FakeNavigator([TaskResult.SUCCEEDED], complete_after=10_000),
+                             [(0.1, 0.0)])
+    try:
+        assert _spin_until(ex, lambda: len(_markers_by_id(har)) == 1)
+        har.send('start')
+        assert _spin_until(ex, lambda: har.last_state == 'navigating:0'), "reaches navigating"
+        har.estop(True)
+        assert _spin_until(ex, lambda: har.last_state == 'estopped'), \
+            "E-STOP must publish a terminal mission_state, not leave it stuck at 'navigating:0'"
+    finally:
+        _teardown(runner, har, ex)
+
+
+def test_nan_odom_does_not_falsely_complete_spray():
+    """REGRESSION (geometry NaN): a malformed odom quaternion made yaw NaN; the worker-loop spray
+    then did turned += NaN, so `turned < target` became False and the spin EXITED immediately,
+    marking an un-sprayed bloom TREATED. A non-finite odom sample must be ignored: _spray_turned
+    stays finite and a NaN burst can never satisfy the completion criterion on its own."""
+    runner, har, ex = _build(FakeNavigator([TaskResult.SUCCEEDED]), [(0.1, 0.0)],
+                             spray_revolutions=1.0, spray_omega=8.0)
+    try:
+        # drive the accumulator directly with a NaN-quaternion odom while a spray is armed
+        runner._spray_active = True
+        runner._spray_turned = 0.0
+        runner._spray_last_yaw = None
+        bad = Odometry()
+        bad.pose.pose.orientation.z = float('nan')
+        bad.pose.pose.orientation.w = float('nan')
+        runner._on_odom(bad)
+        runner._on_odom(bad)
+        assert math.isfinite(runner._spray_turned) and runner._spray_turned == 0.0, \
+            "a NaN odom sample must never be accumulated into the spray count"
+        runner._spray_active = False
+    finally:
+        _teardown(runner, har, ex)
+
+
 def test_worker_crash_reverts_inflight_bloom_to_pending():
     """A worker crash (e.g. the navigator throwing) must not leave the in-flight bloom stuck ACTIVE
     (blue, looks in-progress forever): it reverts to PENDING so a re-Start resumes it honestly."""

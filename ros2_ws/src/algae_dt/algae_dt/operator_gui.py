@@ -48,6 +48,15 @@ class GuiBridge(Node):
         self.range_max = gp('scan_range_max_m', 3.5)
         self.latency_budget_ms = gp('latency_budget_ms', 250.0)
         self.stale_after_s = gp('gui_stale_after_s', 2.0)
+        # sync_supervisor republishes a STILL-TRUE /dt/alerts at most every alert_repeat_s on ITS
+        # clock — which is SIM time in sim_only. The GUI ages the banner on WALL time, so under a
+        # throttled real-time-factor (~0.5) the wall gap between republishes (~2x alert_repeat_s)
+        # exceeded a fixed 10 s window and the banner flipped to green while the condition still
+        # held. Hold the banner at least 3x alert_repeat_s of wall time so a persistent alert stays
+        # visible across the worst documented RTF. (A persistent issue staying RED is the safe side.)
+        alert_repeat_s = gp('alert_repeat_s', 5.0)
+        hold = gp('gui_alert_hold_s', 0.0)
+        self.alert_hold_s = hold if hold > 0.0 else max(10.0, 3.0 * alert_repeat_s)
 
         # latest state for the canvas/banners
         self.real_pose = None
@@ -367,7 +376,7 @@ def _make_window(bridge: GuiBridge):
                 self._set('latency', f"LATENCY: {b.latency_ms:.0f} ms",
                           'green' if b.latency_ms <= b.latency_budget_ms else 'red')
             alert_age = time.monotonic() - b.last_alert_t
-            if b.last_alert and alert_age < 10.0:
+            if b.last_alert and alert_age < b.alert_hold_s:
                 self._set('alerts', f"ALERT: {b.last_alert}", 'red')
             else:
                 self._set('alerts', "ALERTS: none", 'green')

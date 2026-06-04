@@ -188,6 +188,35 @@ def test_gate_default_sim_budget_equals_real_budget():
     assert safety.gate(real, sim, stop_distance_m=0.25, max_data_age_s=1.0) is True
 
 
+def test_gate_blocks_when_REAL_world_close_not_only_sim():
+    """Discriminating: a regression that ignored the REAL scan's range (only gating on sim) would
+    pass every other 'blocked' test here, which all put the obstacle on the sim side. The real
+    Burger seeing a 20 cm obstacle MUST block forward motion on its own."""
+    real = _status(front_min=0.20)           # the REAL robot sees the box within 25 cm
+    sim = _status(front_min=3.0)             # sim is clear
+    assert safety.gate(real, sim, stop_distance_m=0.25, max_data_age_s=1.0) is True
+
+
+# --------------------------- limit_command fail-safe -------------------------
+
+def test_limit_command_nan_velocity_fails_to_stop_not_full_throttle():
+    """A NaN command must STOP, never drive: min(0.22, NaN)->0.22 then max(-0.22, 0.22)->0.22, so an
+    unvalidated NaN was AMPLIFIED to full forward+angular speed when the gate was clear (fail-unsafe).
+    Every non-finite component now yields (0,0)."""
+    for vx, wz in ((float('nan'), 0.1), (0.1, float('nan')),
+                   (float('inf'), 0.0), (0.0, float('-inf')), (float('nan'), float('nan'))):
+        out = safety.limit_command(vx, wz, blocked=False, estop=False,
+                                   max_linear=0.22, max_angular=2.0)
+        assert out == (0.0, 0.0), f"non-finite ({vx},{wz}) must fail safe to stop, got {out}"
+
+
+def test_limit_command_finite_still_clamps_normally():
+    assert safety.limit_command(0.5, 9.0, blocked=False, estop=False,
+                                max_linear=0.22, max_angular=2.0) == (0.22, 2.0)
+    assert safety.limit_command(0.5, 0.0, blocked=True, estop=False,
+                                max_linear=0.22, max_angular=2.0) == (0.0, 0.0)
+
+
 # --------------------------- front_min_from_scan ----------------------------
 # The bounds-clamped LaserScan wrapper shared by the mediator and sync_supervisor.
 
