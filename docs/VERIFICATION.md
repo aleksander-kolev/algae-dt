@@ -19,15 +19,15 @@ docker run --rm -v "$PWD/ros2_ws:/ws" -v "$PWD/docker:/ci" algae-dt:dev bash /ci
 ## Pure libraries (no ROS, unit-tested)
 | Lib | What | Tests |
 |---|---|---|
-| `lib/safety.py` | 25 cm dual-LiDAR fail-safe gate (full-width front sector, NaN/inf, wrap-around, stale→blocked, startup→unblocked, OR-block, command shaping) | `test_safety.py` (25) |
+| `lib/safety.py` | 25 cm dual-LiDAR fail-safe gate (full-width front sector, NaN/inf, wrap-around, stale→blocked, startup→unblocked, OR-block, per-world staleness budgets, bounds-clamped scan wrapper, command shaping) | `test_safety.py` (31) |
 | `lib/blooms.py` | immutable Bloom/BloomField, nearest_untreated (active not skipped), terminal states | `test_blooms.py` (13) |
 | `lib/sync.py` | pose/sensor error + tolerances + commanded-shadow unicycle | `test_sync.py` (13) |
 | `lib/metrics.py` | command→motion latency, inf-safe CSV row/header | `test_metrics.py` (7) |
-| `lib/geometry.py` | world↔pixel, yaw↔quaternion, angle wrap | `test_geometry.py` (11) |
+| `lib/geometry.py` | world↔pixel (floor semantics: off-map stays off-map), yaw↔quaternion, angle wrap, shared pose/MapInfo helpers | `test_geometry.py` (14) |
 | `lib/pgm.py` | P5/P2 parser incl. the real 86×110 course map | `test_pgm.py` (9) |
 | `lib/hud.py` | battery colour thresholds, scan projection, status text | `test_hud.py` (5) |
-| `lib/occupancy.py` | static-map goal projection / `reachable_goal` (off-wall goal clearance) | `test_occupancy.py` (11) |
-| `lib/trajectory.py` | dynamic-obstacle sinusoidal sweep | `test_trajectory.py` (4) |
+| `lib/occupancy.py` | static-map goal projection / `reachable_goal` (off-wall + edge-aware clearance, off-map rejection) | `test_occupancy.py` (14) |
+| `lib/trajectory.py` | dynamic-obstacle sinusoidal sweep + spawn keep-out clamp | `test_trajectory.py` (10) |
 
 ## Pillar ① — Bidirectional (fan-in / fan-out)
 - **`twin_mediator`** is the single command chokepoint: subscribes `/dt/cmd_vel_raw` (TwistStamped)
@@ -39,21 +39,21 @@ docker run --rm -v "$PWD/ros2_ws:/ws" -v "$PWD/docker:/ci" algae-dt:dev bash /ci
   (`/scan`+`/sim/scan`, `/cmd_vel`+`/sim/cmd_vel` both TwistStamped, distinct). NOTE: a MANUAL
   smoke check, not a collected test — re-verify after touching `_sim_mirror` (the sim RSP remaps
   `/tf` `/tf_static` `/robot_description` `/joint_states` onto `/sim/*`).
-- Mediator integration: `test_mediator.py` (8).
+- Mediator integration: `test_mediator.py` (10).
 
 ## Pillar ② — Synchronization of states (the differentiator)
 - **`sync_supervisor`** publishes the *measured* `/dt/sync_error` (Δxy, Δyaw, sensor), `/dt/latency_ms`
   (command→motion), latched `/dt/sync_ok`, and `/dt/alerts` when out of the documented `twin.yaml`
   tolerances; appends a flushed `sync_metrics_*.csv` with `stop_skew_ms`.
-- **Proof:** `test_sync_supervisor.py` (8) — in-tolerance vs out-of-tolerance flip + alert, latency
+- **Proof:** `test_sync_supervisor.py` (11) — in-tolerance vs out-of-tolerance flip + alert, latency
   measured, CSV written with the documented columns. sim_only sync source = commanded-shadow vs
   achieved sim pose (mediator integrates the gated command into `/dt/real_pose`).
 
 ## Pillar ③ — Environmental (safety + autonomy + live change)
 - **25 cm dual-LiDAR stop on BOTH worlds, fail-safe** — `test_safety.py` (gate logic) +
-  `test_mediator.py` (8) (live zeroing of forward + `/dt/safety`) +
+  `test_mediator.py` (10) (live zeroing of forward + `/dt/safety`) +
   `test_fake_robot.py::test_front_obstacle_triggers_safety_stop_through_mediator` (hardware-free).
-- **Navigate-and-spray with honest accounting** — `test_mission_runner.py` (16): SUCCEEDED→spray+treated,
+- **Navigate-and-spray with honest accounting** — `test_mission_runner.py` (20): SUCCEEDED→spray+treated,
   nav-fail→skipped (no spray), Stop/E-STOP mid-nav→pending.
 - **Live environment change / dynamic obstacle** — `worlds/obstacle_box.sdf` + `dynamic_obstacle`
   (sweep via gz set_pose; path unit-tested in `test_trajectory.py`). Spawn/move it mid-run → the

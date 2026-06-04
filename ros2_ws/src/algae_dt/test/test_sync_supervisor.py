@@ -166,7 +166,9 @@ def test_unstamped_command_still_measures_latency(world):
     har.cmd_vx = 0.2
     har.odom_vx = 0.2
     ok = _spin_until(ex, lambda: har.last_latency is not None, secs=4.0)
-    assert ok and har.last_latency >= 0.0
+    # The upper bound is the discriminating part: a header-stamp implementation would difference
+    # the zero cmd stamp against an epoch odom stamp -> ~1.7e12 ms, which must FAIL here.
+    assert ok and 0.0 <= har.last_latency < 1000.0
 
 
 def test_real_only_without_sim_world_is_healthy():
