@@ -18,8 +18,11 @@ ros2 launch turtlebot3_bringup robot.launch.py          # leave running
 ./scripts/lab_run.sh
 ```
 Step 3 self-heals (builds the image if missing, recreates `~/turtlebot3_ws`, builds the package),
-**verifies it sees the robot's `/scan`**, then launches the twin + GUI. Then do the **2D Pose
-Estimate** (below). Teleop in another terminal: the script prints the exact `docker exec …` line.
+**verifies it sees the robot's `/scan`**, then launches the twin + GUI **+ RViz** (the launch opens
+RViz automatically in `both`/`real_only` — it is required for the 2D Pose Estimate). Then do the
+**2D Pose Estimate** (below). Teleop in another terminal: the script prints the exact
+`docker exec …` line. Weak/odd GPU? `./scripts/lab_run.sh --no-gz-gui` skips the gz 3D window
+(RViz + operator console still show everything; a gz 3D crash no longer kills the launch either).
 
 ## Start the demo — fully manual (no script)
 ```bash
@@ -45,7 +48,8 @@ ros2 launch algae_dt bringup.launch.py mode:=both
 ## 2D Pose Estimate — the one manual click (do it every run)
 Nav2's **AMCL** starts NOT knowing where the robot is (it seeds at the map origin). Five robots share
 the arena, so the real start never matches the origin — you must tell AMCL the true pose once:
-1. In **RViz** (opens with the stack) click **“2D Pose Estimate”** in the top toolbar.
+1. In **RViz** (opens automatically in `both`/`real_only`; force with `use_rviz:=true`) click
+   **“2D Pose Estimate”** in the top toolbar.
 2. **Click on the map at the robot's actual position**, and **hold + drag** in the direction the
    robot is **physically facing**, then release. The green arrow = (position, heading).
 3. **Verify it took:** the LiDAR points (red) should snap onto the map walls and the costmap aligns

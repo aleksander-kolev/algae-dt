@@ -148,6 +148,36 @@ Confirmed before implementation:
   `mission_runner` on its OWN executor so the worker's `BasicNavigator` (which spins the global
   executor) doesn't fight `rclpy.spin`. `/dt/cmd_vel_raw` has 2 publishers (mission + collision_monitor)
   but the latter is SILENT when idle (probe: 0 msgs), so the spray is not diluted after a goal completes.
+- **One observer clock for ALL cross-world timing.** Header stamps cross clock domains: the real
+  Burger stamps with the Pi's wall clock (un-NTP'd over lab Wi-Fi), the laptop has its own, gz
+  stamps with sim time near 0. Differencing them gave 10^12 ms "stop skews" and offset-polluted
+  latencies. Measure latency + stop-skew from the supervisor's OWN clock at message ARRIVAL.
+  A test that fabricates matching header stamps will happily pin the broken behaviour — write the
+  regression test with DELIBERATELY mismatched clock bases instead.
+- **Mode-aware required streams.** `real_only` has no sim world: any check that waits for
+  `/dt/sim_pose` there (stream-ok, CSV gating) alert-spams at the tick rate forever and starves the
+  evidence CSV. Make 'which worlds must report' a function of the mode.
+- **RViz default must be mode-aware.** AMCL in `real_only`/`both` can only be seeded via RViz's
+  2D Pose Estimate (nothing else publishes `/initialpose`), so `use_rviz` defaults to `auto` = ON
+  in those modes. Docs that say "RViz opens with the stack" must be made TRUE by the launch, not
+  assumed.
+- **The gz 3D client must be non-fatal.** Its big OGRE2 VBO crashes weak GL stacks; with
+  `on_exit_shutdown:true` that tore down the whole graded demo. Run the `-g` client with
+  `on_exit_shutdown:false` (server stays critical) and thread `gz_gui` through `both` too.
+- **Anti-stall ≠ time cap.** The spray's total-time backstop (margin x nominal) fires on a merely
+  SLOW sim (zero headroom at RTF 0.5 with margin 2) and skips healthy blooms. The right guard is a
+  PROGRESS watchdog (abort when odom yaw hasn't advanced for N wall-seconds); keep a generous cap
+  only as belt-and-braces.
+- **Check arrival against the goal you SENT.** With goal projection, the projected goal sits up to
+  `center_tol_m` from the raw bloom centre; gross-arrival measured to the raw centre falsely
+  skipped exactly the near-wall blooms projection exists to save.
+- **Latched things must LATCH.** `_estop_battery = crit` re-evaluated per sample silently
+  un-latches when a sagging LiPo bounces back over the threshold. Set-on-trip, clear-only-on-RESUME
+  (and a still-critical battery re-trips on the next sample, so RESUME can't bypass it).
+- **In-process integration tests can starve callbacks.** All harness+node traffic shares one
+  test-pumped executor; adding one more 30 Hz publisher made the spray loop's odom view lag and
+  over-rotate. Keep harness side-traffic at the lowest realistic rate (and remember `spin_once`
+  executes ONE callback — the GUI drains a bounded batch per Qt tick for the same reason).
 
 ## TA-familiar fallback: the manual multi-terminal launch
 If a combined `bringup.launch.py` misbehaves in the lab, fall back to the course's per-component

@@ -20,7 +20,8 @@ Concise run scenarios. Setup commands → `docs/SETUP.md`. Each scenario: **step
 - **If-not:** check `/dt/scan_active` populated; `stop_distance_m`; front-sector convention.
 
 ## S3 · `real_only` autonomous bloom (Nav2 + spray)
-1. `ros2 launch algae_dt bringup.launch.py mode:=real_only`; in RViz set **2D Pose Estimate** on the robot's real spot; wait for AMCL lock.
+1. `ros2 launch algae_dt bringup.launch.py mode:=real_only` (RViz opens automatically in this mode);
+   in RViz set **2D Pose Estimate** on the robot's real spot; wait for AMCL lock.
 2. GUI → place 1 bloom in open space (≥0.3 m from walls) → **Start**.
 - **Expected:** Nav2 drives to centre (±0.15 m), spins 3 full turns, bloom→green, mission complete.
 - **If-not:** bloom **grey** = unreachable (move from wall) / not localized (redo 2D Pose Estimate

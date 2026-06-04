@@ -1,7 +1,9 @@
 # VERIFICATION.md — what is implemented, how it's proven, and where
 
-Every deliverable maps to a rubric pillar and to concrete, re-runnable evidence. **145 tests pass**
-and `colcon build --packages-select algae_dt` is clean in the reproducible `algae-dt:dev` image.
+Every deliverable maps to a rubric pillar and to concrete, re-runnable evidence. **The full test
+suite passes** (`bash /ci/ci.sh` prints the authoritative count) and
+`colcon build --packages-select algae_dt` is clean in the reproducible `algae-dt:dev` image.
+These claims describe the **committed HEAD** — re-run the gate after any local change.
 
 ## How to reproduce the evidence
 ```bash
@@ -19,8 +21,8 @@ docker run --rm -v "$PWD/ros2_ws:/ws" -v "$PWD/docker:/ci" algae-dt:dev bash /ci
 |---|---|---|
 | `lib/safety.py` | 25 cm dual-LiDAR fail-safe gate (full-width front sector, NaN/inf, wrap-around, stale→blocked, startup→unblocked, OR-block, command shaping) | `test_safety.py` (25) |
 | `lib/blooms.py` | immutable Bloom/BloomField, nearest_untreated (active not skipped), terminal states | `test_blooms.py` (13) |
-| `lib/sync.py` | pose/sensor error + tolerances + classify + commanded-shadow unicycle | `test_sync.py` (13) |
-| `lib/metrics.py` | command→motion latency, data age, inf-safe CSV row/header | `test_metrics.py` (7) |
+| `lib/sync.py` | pose/sensor error + tolerances + commanded-shadow unicycle | `test_sync.py` (13) |
+| `lib/metrics.py` | command→motion latency, inf-safe CSV row/header | `test_metrics.py` (7) |
 | `lib/geometry.py` | world↔pixel, yaw↔quaternion, angle wrap | `test_geometry.py` (11) |
 | `lib/pgm.py` | P5/P2 parser incl. the real 86×110 course map | `test_pgm.py` (9) |
 | `lib/hud.py` | battery colour thresholds, scan projection, status text | `test_hud.py` (5) |
@@ -34,7 +36,9 @@ docker run --rm -v "$PWD/ros2_ws:/ws" -v "$PWD/docker:/ci" algae-dt:dev bash /ci
 - **Hardware-free proof:** `test_fake_robot.py::test_bidirectional_loop_through_mediator` — commanding
   the bus moves the (fake) real robot and its odom returns on `/dt/real_pose` (digital→real→digital).
 - **`both` collision-free** (real bare vs sim `/sim/*`): verified live by the both-mode topic check
-  (`/scan`+`/sim/scan`, `/cmd_vel`+`/sim/cmd_vel` both TwistStamped, distinct).
+  (`/scan`+`/sim/scan`, `/cmd_vel`+`/sim/cmd_vel` both TwistStamped, distinct). NOTE: a MANUAL
+  smoke check, not a collected test — re-verify after touching `_sim_mirror` (the sim RSP remaps
+  `/tf` `/tf_static` `/robot_description` `/joint_states` onto `/sim/*`).
 - Mediator integration: `test_mediator.py` (8).
 
 ## Pillar ② — Synchronization of states (the differentiator)
