@@ -115,6 +115,27 @@ def test_bridge_ingests_dt_state():
         rclpy.shutdown()
 
 
+def test_bridge_ingests_alerts():
+    """The operator console must surface /dt/alerts (latency/sync/stop-skew tolerances are a graded
+    deliverable — they were previously invisible to the operator)."""
+    rclpy.init()
+    bridge = GuiBridge()
+    pub = rclpy.create_node('gui_alert_pub')
+    p_alert = pub.create_publisher(String, '/dt/alerts', 10)
+    ex = SingleThreadedExecutor()
+    ex.add_node(bridge)
+    ex.add_node(pub)
+    try:
+        p_alert.publish(String(data='LATENCY 400 ms > budget 250 ms'))
+        ok = _spin_until(ex, lambda: 'LATENCY' in bridge.last_alert)
+        assert ok and bridge.last_alert_t > float('-inf')
+    finally:
+        ex.shutdown()
+        bridge.destroy_node()
+        pub.destroy_node()
+        rclpy.shutdown()
+
+
 def test_window_builds_and_paints_offscreen():
     from PyQt5 import QtWidgets
     rclpy.init()
@@ -129,12 +150,66 @@ def test_window_builds_and_paints_offscreen():
         assert win.canvas._img.width() == bridge.map_info.width_px == 86
         assert win.canvas._img.height() == bridge.map_info.height_px == 110
         # a click in the canvas centre places a bloom (screen->world->/dt/blooms list)
-        x, y = win.canvas.screen_to_world(win.canvas.width() / 2, win.canvas.height() / 2)
+        w = win.canvas.screen_to_world(win.canvas.width() / 2, win.canvas.height() / 2)
+        assert w is not None
         before = len(bridge._blooms)
-        bridge.place_bloom(x, y)
+        bridge.place_bloom(*w)
         assert len(bridge._blooms) == before + 1
         win.canvas.repaint()           # paints map + bloom (no pose/scan yet) without error
         app.processEvents()
+    finally:
+        win._spin.stop()
+        win._repaint.stop()
+        bridge.destroy_node()
+        rclpy.shutdown()
+
+
+def test_margin_click_is_rejected_not_a_phantom_bloom():
+    """The canvas keeps aspect ratio, so it has dark margins around the map image. A click there
+    used to truncate to a plausible off-map world point and publish a phantom bloom the mission
+    would chase; screen_to_world must return None and place nothing."""
+    from PyQt5 import QtWidgets
+    rclpy.init()
+    bridge = GuiBridge()
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    win = operator_gui._make_window(bridge)
+    try:
+        win.resize(800, 600)        # 86x110 map scaled by ~5.45 -> wide dark margins left/right
+        win.show()
+        app.processEvents()
+        assert win.canvas.screen_to_world(5.0, 5.0) is None, "margin click maps off the image"
+        before = len(bridge._blooms)
+
+        class _Ev:                  # minimal QMouseEvent stand-in
+            def x(self): return 5
+            def y(self): return 5
+        win.canvas.mousePressEvent(_Ev())
+        assert len(bridge._blooms) == before, "a margin click must not place a bloom"
+    finally:
+        win._spin.stop()
+        win._repaint.stop()
+        bridge.destroy_node()
+        rclpy.shutdown()
+
+
+def test_scan_overlay_anchors_to_the_active_robots_pose():
+    """/dt/scan_active carries the ACTIVE robot's scan: the sim's in sim_only, the REAL Burger's in
+    real_only/both. The overlay must anchor to the matching pose — anchoring the real scan to the
+    sim pose detached the overlay exactly when real and sim diverge (the thing the twin shows)."""
+    from PyQt5 import QtWidgets
+    rclpy.init()
+    bridge = GuiBridge()
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    win = operator_gui._make_window(bridge)
+    try:
+        bridge.real_pose = (1.0, 1.0, 0.0)
+        bridge.sim_pose = (2.0, 2.0, 0.0)
+        bridge.mode = 'both'
+        assert win.canvas._active_pose() == (1.0, 1.0, 0.0), "both: the active robot is the REAL one"
+        bridge.mode = 'real_only'
+        assert win.canvas._active_pose() == (1.0, 1.0, 0.0)
+        bridge.mode = 'sim_only'
+        assert win.canvas._active_pose() == (2.0, 2.0, 0.0), "sim_only: the active robot IS the sim"
     finally:
         win._spin.stop()
         win._repaint.stop()

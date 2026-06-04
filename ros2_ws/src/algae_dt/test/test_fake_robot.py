@@ -38,15 +38,25 @@ class CmdVelHarness(Node):
     def __init__(self):
         super().__init__('fakebot_harness')
         self.vx = 0.0
+        self.emit = True
         self.odom_x = None
+        self.odom_child = None
         self.got_scan = False
         self.got_batt = False
         self.p_cmd = self.create_publisher(TwistStamped, '/cmd_vel', 10)
         from rclpy.qos import qos_profile_sensor_data
-        self.create_subscription(Odometry, '/odom', lambda m: setattr(self, 'odom_x', m.pose.pose.position.x), 10)
+        self.create_subscription(Odometry, '/odom', self._on_odom, 10)
         self.create_subscription(LaserScan, '/scan', lambda m: setattr(self, 'got_scan', True), qos_profile_sensor_data)
         self.create_subscription(BatteryState, '/battery_state', lambda m: setattr(self, 'got_batt', True), 10)
-        self.create_timer(1.0 / 30.0, lambda: self.p_cmd.publish(TwistStamped(twist=_t(self.vx))))
+        self.create_timer(1.0 / 30.0, self._tick)
+
+    def _on_odom(self, m):
+        self.odom_x = m.pose.pose.position.x
+        self.odom_child = m.child_frame_id
+
+    def _tick(self):
+        if self.emit:
+            self.p_cmd.publish(TwistStamped(twist=_t(self.vx)))
 
 
 def _t(vx):
@@ -66,10 +76,70 @@ def test_fake_robot_integrates_cmd_and_publishes_sensors():
         har.vx = 0.2
         assert _spin_until(ex, lambda: har.odom_x is not None and har.odom_x > 0.02), "odom advances under command"
         assert _spin_until(ex, lambda: har.got_scan and har.got_batt), "publishes /scan and /battery_state"
+        assert har.odom_child == 'base_footprint', "odom child frame matches the real Burger's"
     finally:
         ex.shutdown()
         bot.destroy_node()
         har.destroy_node()
+        rclpy.shutdown()
+
+
+def test_fake_robot_stops_on_cmd_silence_like_the_real_burger():
+    """The real turtlebot3_node halts when /cmd_vel goes silent; the stand-in must mirror that
+    (max_cmd_age_s) instead of coasting forever on the last command and drifting off the map."""
+    import time as _time
+    rclpy.init()
+    bot = FakeRobot()
+    har = CmdVelHarness()
+    ex = SingleThreadedExecutor()
+    ex.add_node(bot)
+    ex.add_node(har)
+    try:
+        har.vx = 0.2
+        assert _spin_until(ex, lambda: har.odom_x is not None and har.odom_x > 0.02)
+        har.emit = False                                   # the command stream dies
+        _spin_until(ex, lambda: False, secs=0.8)           # > max_cmd_age_s (0.5)
+        x_after_timeout = har.odom_x
+        _spin_until(ex, lambda: False, secs=0.8)
+        assert abs(har.odom_x - x_after_timeout) < 0.005, \
+            "fake robot must STOP on command silence, not coast"
+    finally:
+        ex.shutdown()
+        bot.destroy_node()
+        har.destroy_node()
+        rclpy.shutdown()
+
+
+def test_fake_robot_broadcasts_the_full_burger_tf_chain():
+    """AMCL + the Nav2 costmaps need odom -> base_footprint -> base_link -> base_scan to transform
+    /scan. fake_robot previously broadcast only odom->base_link, leaving base_scan unresolvable —
+    Nav2 was dead in the hardware-free real_only/both path while every topic-level test passed."""
+    from tf2_msgs.msg import TFMessage
+    from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+    rclpy.init()
+    bot = FakeRobot()
+    watcher = rclpy.create_node('tf_watcher')
+    dynamic, static = [], []
+    watcher.create_subscription(TFMessage, '/tf', lambda m: dynamic.extend(m.transforms), 50)
+    watcher.create_subscription(
+        TFMessage, '/tf_static', lambda m: static.extend(m.transforms),
+        QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE,
+                   durability=DurabilityPolicy.TRANSIENT_LOCAL))
+    ex = SingleThreadedExecutor()
+    ex.add_node(bot)
+    ex.add_node(watcher)
+    try:
+        assert _spin_until(ex, lambda: dynamic and len(static) >= 2, secs=8.0), \
+            "both dynamic and static TF must be broadcast"
+        dyn_pairs = {(t.header.frame_id, t.child_frame_id) for t in dynamic}
+        static_pairs = {(t.header.frame_id, t.child_frame_id) for t in static}
+        assert ('odom', 'base_footprint') in dyn_pairs
+        assert ('base_footprint', 'base_link') in static_pairs
+        assert ('base_link', 'base_scan') in static_pairs
+    finally:
+        ex.shutdown()
+        bot.destroy_node()
+        watcher.destroy_node()
         rclpy.shutdown()
 
 

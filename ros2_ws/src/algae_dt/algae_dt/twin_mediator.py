@@ -16,6 +16,8 @@ this node is the ROS wiring around them.
 """
 from __future__ import annotations
 
+import functools
+
 import rclpy
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from nav_msgs.msg import Odometry
@@ -24,10 +26,11 @@ from rclpy.qos import (DurabilityPolicy, QoSProfile, ReliabilityPolicy,
                        qos_profile_sensor_data)
 from rclpy.time import Time as RclpyTime
 from sensor_msgs.msg import BatteryState, LaserScan
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool, Float64, String
 from tf2_ros import Buffer, TransformException, TransformListener
 
 from algae_dt.lib import geometry, hud, safety, sync
+from algae_dt.lib.ros_utils import declare_get
 
 INF = float('inf')
 
@@ -43,18 +46,19 @@ class TwinMediator(Node):
         super().__init__('twin_mediator', **kwargs)
 
         # --- parameters (defaults mirror config/twin.yaml; the launch binds the file via /**) ---
-        gp = self._declare
+        gp = functools.partial(declare_get, self)
         self.mode = gp('mode', 'sim_only')
         self.stop_distance_m = gp('stop_distance_m', 0.25)
         self.front_sector_rad = gp('front_sector_rad', 0.70)
         self.range_min = gp('scan_range_min_m', 0.12)
         self.range_max = gp('scan_range_max_m', 3.5)
         self.max_linear = gp('max_linear_mps', 0.22)
-        self.max_angular = gp('max_angular_radps', 2.0)
+        self.max_angular = gp('max_angular_radps', 2.84)
         self.cmd_rate_hz = gp('cmd_rate_hz', 20.0)
         self.health_rate_hz = gp('health_rate_hz', 1.0)
         self.max_cmd_age_s = gp('max_cmd_age_s', 0.5)
         self.max_data_age_s = gp('max_data_age_s', 1.0)
+        self.sim_max_data_age_s = gp('sim_max_data_age_s', 2.0)   # looser budget for the MIRROR sim scan
         self.battery_low_v = gp('battery_low_v', 11.0)
         self.battery_critical_v = gp('battery_critical_v', 10.5)
         self.batt_sim_start = gp('battery_sim_start_v', 12.5)
@@ -75,8 +79,9 @@ class TwinMediator(Node):
         self._sim_scan: LaserScan | None = None
         self._sim_scan_t = 0.0
         self._battery_v: float | None = None
+        self._battery_override_v: float | None = None   # sim_only demo override (None = off)
         self._estop_manual = False
-        self._estop_battery = False
+        self._estop_battery = False                     # LATCHED on critical; cleared only by RESUME
         self._estop_latched = False
         self._shadow = (0.0, 0.0, 0.0)        # commanded shadow pose (sim_only /dt/real_pose), MAP frame
         self._shadow_t: float | None = None
@@ -102,6 +107,11 @@ class TwinMediator(Node):
         self.create_subscription(Odometry, '/odom', self._on_odom, 10)
         self.create_subscription(BatteryState, '/battery_state', self._on_battery, 10)
         self.create_subscription(Bool, '/dt/estop_cmd', self._on_estop_cmd, _latched())
+        # Demo override for the sim_only synthetic battery (the natural drain floors at
+        # battery_sim_min_v, ABOVE critical, so the auto-E-STOP beat needs a forced voltage):
+        #   ros2 topic pub --once /dt/battery_override_v std_msgs/msg/Float64 "{data: 10.0}"
+        # <= 0.0 clears the override. Ignored outside sim_only (the real battery is real).
+        self.create_subscription(Float64, '/dt/battery_override_v', self._on_battery_override, 10)
         if self._both:
             self.create_subscription(LaserScan, '/sim/scan', self._on_sim_scan, qos_profile_sensor_data)
             self.create_subscription(Odometry, '/sim/odom', self._on_sim_odom, 10)
@@ -123,10 +133,6 @@ class TwinMediator(Node):
             f"front_sector={self.front_sector_rad} rad (full width)")
 
     # ------------------------------------------------------------------ utils
-    def _declare(self, name, default):
-        self.declare_parameter(name, default)
-        return self.get_parameter(name).value
-
     def _now(self) -> float:
         return self.get_clock().now().nanoseconds * 1e-9
 
@@ -146,8 +152,7 @@ class TwinMediator(Node):
 
     @staticmethod
     def _pose_xyyaw(p):
-        o = p.orientation
-        return (p.position.x, p.position.y, geometry.yaw_from_quaternion(o.z, o.w))
+        return geometry.pose_xyyaw(p)
 
     def _map_posestamped(self, xyyaw) -> PoseStamped:
         ps = PoseStamped()
@@ -172,7 +177,10 @@ class TwinMediator(Node):
         self._sim_scan_t = self._now()
 
     def _on_odom(self, msg: Odometry) -> None:
-        self.pub_odom_active.publish(msg)                     # raw odom frame (sync/latency uses it)
+        # NOTE: /dt/odom_active is a raw pass-through and stays in the ODOM frame (sync_supervisor
+        # only reads its twist + arrival time; mission_runner only its yaw for the spin count).
+        # Anything needing a MAP-frame pose must use /dt/real_pose | /dt/sim_pose instead.
+        self.pub_odom_active.publish(msg)
         # Lift the odom pose into the MAP frame via map<-odom (AMCL) so the GUI overlays it on the
         # map exactly where RViz shows the robot. Identity until AMCL localizes (then == odom frame).
         map_xyyaw = geometry.compose_pose_2d(self._T_map_odom, self._pose_xyyaw(msg.pose.pose))
@@ -198,16 +206,31 @@ class TwinMediator(Node):
         if self.mode != 'sim_only':
             self.pub_health.publish(msg)
 
+    def _on_battery_override(self, msg: Float64) -> None:
+        if self.mode != 'sim_only':
+            self.get_logger().warn("battery override ignored outside sim_only (real battery is real)")
+            return
+        self._battery_override_v = float(msg.data) if msg.data > 0.0 else None
+        self.get_logger().warn(f"sim battery override -> {self._battery_override_v}")
+
     def _on_estop_cmd(self, msg: Bool) -> None:
         self._estop_manual = bool(msg.data)
+        if not msg.data:
+            # Operator RESUME clears EVERY latched cause, including the battery trip. Without this
+            # the battery latch could never be released; with auto-relatching below, a still-critical
+            # battery re-trips on the next sample, so RESUME cannot bypass a genuinely dead battery.
+            self._estop_battery = False
         self._refresh_estop()
 
     # --------------------------------------------------------------- E-STOP
     def _update_battery_estop(self, voltage: float) -> None:
-        crit = voltage <= self.battery_critical_v
-        if crit and not self._estop_battery:
-            self.get_logger().warn(f"battery critical ({voltage:.2f} V) -> auto E-STOP")
-        self._estop_battery = crit
+        # LATCH on critical (RULES: 'latched ... RESUME clears it'). A sagging LiPo bounces above
+        # and below the threshold under load; assigning `crit` each sample silently un-latched the
+        # E-STOP and re-enabled motion with no operator action. Only RESUME (estop_cmd False)
+        # clears the trip now.
+        if voltage <= self.battery_critical_v and not self._estop_battery:
+            self.get_logger().warn(f"battery critical ({voltage:.2f} V) -> auto E-STOP (latched)")
+            self._estop_battery = True
         self._refresh_estop()
 
     def _refresh_estop(self) -> None:
@@ -224,10 +247,7 @@ class TwinMediator(Node):
     def _scan_status(self, scan: LaserScan | None, t: float, now: float) -> safety.ScanStatus:
         if scan is None:
             return safety.ScanStatus(has_data=False, front_min=INF, age_s=0.0)
-        fm = safety.front_min_range(scan.ranges, scan.angle_min, scan.angle_increment,
-                                    self.front_sector_rad,
-                                    scan.range_min or self.range_min,
-                                    scan.range_max or self.range_max)
+        fm = safety.front_min_from_scan(scan, self.front_sector_rad, self.range_min, self.range_max)
         return safety.ScanStatus(has_data=True, front_min=fm, age_s=now - t)
 
     def _on_cmd_timer(self) -> None:
@@ -235,7 +255,8 @@ class TwinMediator(Node):
         active = self._scan_status(self._scan, self._scan_t, now)
         mirror = (self._scan_status(self._sim_scan, self._sim_scan_t, now)
                   if self._both else safety.ScanStatus(False, INF, 0.0))
-        blocked = safety.gate(active, mirror, self.stop_distance_m, self.max_data_age_s)
+        blocked = safety.gate(active, mirror, self.stop_distance_m, self.max_data_age_s,
+                              sim_max_data_age_s=self.sim_max_data_age_s)
 
         if self._last_cmd is None or (now - self._last_cmd_t) > self.max_cmd_age_s:
             base_vx, base_wz = 0.0, 0.0   # watchdog: bus silent -> stop
@@ -279,6 +300,8 @@ class TwinMediator(Node):
         if self.mode == 'sim_only':
             elapsed = self._now() - self._start_t
             v = max(self.batt_sim_min, self.batt_sim_start - self.batt_sim_drain * elapsed)
+            if self._battery_override_v is not None:     # demo: force the auto-E-STOP beat
+                v = self._battery_override_v
             msg = BatteryState()
             msg.header.stamp = self._stamp()
             msg.voltage = float(v)

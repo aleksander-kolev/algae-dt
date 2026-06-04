@@ -49,6 +49,7 @@ class Harness(Node):
         self.last_ok: bool | None = None
         self.last_alert: str | None = None
         self.last_latency: float | None = None
+        self.alert_count = 0
 
         self.p_real = self.create_publisher(PoseStamped, '/dt/real_pose', 10)
         self.p_sim = self.create_publisher(PoseStamped, '/dt/sim_pose', 10)
@@ -56,9 +57,13 @@ class Harness(Node):
         self.p_odom = self.create_publisher(Odometry, '/dt/odom_active', 10)
         self.create_subscription(Vector3, '/dt/sync_error', lambda m: setattr(self, 'last_err', m), 10)
         self.create_subscription(Bool, '/dt/sync_ok', lambda m: setattr(self, 'last_ok', m.data), 10)
-        self.create_subscription(String, '/dt/alerts', lambda m: setattr(self, 'last_alert', m.data), 10)
+        self.create_subscription(String, '/dt/alerts', self._on_alert, 10)
         self.create_subscription(Float64, '/dt/latency_ms', lambda m: setattr(self, 'last_latency', m.data), 10)
         self.create_timer(1.0 / 30.0, self._tick)
+
+    def _on_alert(self, m) -> None:
+        self.last_alert = m.data
+        self.alert_count += 1
 
     def _tick(self) -> None:
         if self.emit_real:
@@ -143,7 +148,7 @@ def test_csv_evidence_written_with_columns(world):
 
 
 def test_missing_world_fails_loud(world):
-    """In real_only/both a missing/stale sim pose stream is itself a desync: sync_supervisor must
+    """In sim_only/both a missing/stale sim pose stream is itself a desync: sync_supervisor must
     flip /dt/sync_ok False and raise /dt/alerts, not silently skip the tick (F5)."""
     har, ex, _ = world
     har.emit_sim = False              # the sim world never reports its pose
@@ -152,15 +157,51 @@ def test_missing_world_fails_loud(world):
     assert ok, "a missing/stale pose stream must flip sync_ok False and alert, not go silent (F5)"
 
 
-def test_unstamped_command_drops_latency_sample(world):
-    """A /cmd_vel with a zero header stamp must NOT be turned into a fabricated ~0 ms latency by
-    substituting wall-now; the sample is dropped instead (F6)."""
+def test_unstamped_command_still_measures_latency(world):
+    """Latency is measured on the supervisor's OWN clock at message arrival — header stamps are not
+    consulted (they cross clock domains between machines/sim). An unstamped /cmd_vel therefore still
+    yields a valid (small, non-negative) latency sample."""
     har, ex, _ = world
-    har.stamp_cmd = False             # /cmd_vel arrives with a zero (invalid) header stamp
+    har.stamp_cmd = False             # zero header stamp: irrelevant to arrival-clock measurement
     har.cmd_vx = 0.2
     har.odom_vx = 0.2
-    fired = _spin_until(ex, lambda: har.last_latency is not None, secs=2.0)
-    assert not fired, "an unstamped command must not fabricate a latency sample (F6)"
+    ok = _spin_until(ex, lambda: har.last_latency is not None, secs=4.0)
+    assert ok and har.last_latency >= 0.0
+
+
+def test_real_only_without_sim_world_is_healthy():
+    """real_only has NO sim world: the supervisor must NOT alert-spam 'stream stale/absent' at the
+    tick rate for the whole lab session, sync_ok must hold True, and the CSV evidence must collect
+    rows (it previously got a header and nothing else)."""
+    import glob as _glob
+    import tempfile
+    tmp = tempfile.mkdtemp()
+    rclpy.init()
+    sup = SyncSupervisor(parameter_overrides=[
+        Parameter('mode', Parameter.Type.STRING, 'real_only'),
+        Parameter('sync_log_dir', Parameter.Type.STRING, tmp),
+    ])
+    har = Harness()
+    har.emit_sim = False              # no /dt/sim_pose exists in real_only — by design
+    ex = SingleThreadedExecutor()
+    ex.add_node(sup)
+    ex.add_node(har)
+    try:
+        ok = _spin_until(ex, lambda: har.last_ok is True and har.last_err is not None, secs=6.0)
+        assert ok, "real_only with a live real pose stream must report sync_ok True"
+        assert har.last_err.x == 0.0, "pose discrepancy degenerates to 0 with no sim world"
+        assert not (har.last_alert or '').startswith('SYNC pose stream'), \
+            "no stale-stream alert storm in real_only"
+        files = _glob.glob(os.path.join(tmp, 'sync_metrics_*.csv'))
+        assert files
+        with open(files[0], encoding='utf-8') as f:
+            lines = f.read().strip().splitlines()
+        assert len(lines) >= 2, "the Rubric-② CSV must collect data rows in real_only"
+    finally:
+        ex.shutdown()
+        sup.destroy_node()
+        har.destroy_node()
+        rclpy.shutdown()
 
 
 def _tl() -> QoSProfile:
@@ -199,9 +240,17 @@ def _pump(ex, n: int = 25) -> None:
         ex.spin_once(timeout_sec=0.02)
 
 
+def _pump_for(ex, secs: float) -> None:
+    end = time.monotonic() + secs
+    while time.monotonic() < end:
+        ex.spin_once(timeout_sec=0.02)
+
+
 def test_both_mode_stop_skew_alerts_when_over_budget(tmp_path):
     """The documented stop_skew_ms tolerance is loaded, compared, and alerted on a safety event in
-    `both` mode (F3); and _pending_stop_skew resets every tick even with the CSV disabled (F4)."""
+    `both` mode (F3); and the pending stop-skew is consumed one-shot even with the CSV disabled (F4).
+    Stop times are taken on the SUPERVISOR's clock at arrival, so the skew is forced by ACTUALLY
+    delaying the sim stop by ~0.2 s of wall time (not by fabricating header stamps)."""
     rclpy.init()
     sup = SyncSupervisor(parameter_overrides=[
         Parameter('mode', Parameter.Type.STRING, 'both'),
@@ -218,15 +267,52 @@ def test_both_mode_stop_skew_alerts_when_over_budget(tmp_path):
         har.p_aodom.publish(_stamped_odom(0.3, 100.0))  # real moving
         har.p_sodom.publish(_stamped_odom(0.3, 100.0))  # sim moving
         _pump(ex, 15)
-        har.p_aodom.publish(_stamped_odom(0.0, 100.1))  # real STOP at t=100.1
-        har.p_sodom.publish(_stamped_odom(0.0, 100.0))  # sim STOP at t=100.0 -> skew 100 ms > 50
+        har.p_aodom.publish(_stamped_odom(0.0, 100.1))  # real STOPS now...
+        _pump_for(ex, 0.20)                             # ...the sim stops ~200 ms of WALL time later
+        har.p_sodom.publish(_stamped_odom(0.0, 100.0))  # -> |skew| ~200 ms > 50 budget
         _pump(ex, 15)
         har.p_safety.publish(Bool(data=True))           # safety edge captures the skew
         got = _spin_until(ex, lambda: 'STOP-SKEW' in (har.last_alert or ''), secs=4.0)
         assert got, "stop-skew over the documented budget must raise /dt/alerts (F3)"
         _pump(ex, 10)
         assert sup._pending_stop_skew is None, \
-            "pending stop-skew must reset each tick even with the CSV off (F4)"
+            "pending stop-skew must be consumed one-shot even with the CSV off (F4)"
+    finally:
+        ex.shutdown()
+        sup.destroy_node()
+        har.destroy_node()
+        rclpy.shutdown()
+
+
+def test_both_mode_stop_skew_immune_to_clock_domain_mismatch(tmp_path):
+    """REGRESSION (the headline both-mode bug): the real robot stamps odom with the Pi's WALL clock
+    (~1.7e9 s) while the gz bridge stamps /sim/odom with SIM time (~seconds). Differencing those
+    header stamps made every stop_skew astronomically over budget. Measured on the supervisor's own
+    arrival clock, two near-simultaneous stops must produce NO stop-skew alert despite header stamps
+    from wildly different clock domains."""
+    rclpy.init()
+    sup = SyncSupervisor(parameter_overrides=[
+        Parameter('mode', Parameter.Type.STRING, 'both'),
+        Parameter('stop_skew_ms', Parameter.Type.DOUBLE, 300.0),
+        Parameter('sync_log_enable', Parameter.Type.BOOL, False),
+        Parameter('sync_log_dir', Parameter.Type.STRING, str(tmp_path)),
+    ])
+    har = BothHarness()
+    ex = SingleThreadedExecutor()
+    ex.add_node(sup)
+    ex.add_node(har)
+    try:
+        _pump(ex, 15)
+        har.p_aodom.publish(_stamped_odom(0.3, 1.7e9))      # real: epoch wall-clock stamps
+        har.p_sodom.publish(_stamped_odom(0.3, 5.0))        # sim: small sim-time stamps
+        _pump(ex, 15)
+        har.p_aodom.publish(_stamped_odom(0.0, 1.7e9 + 0.1))   # both stop (near-)simultaneously
+        har.p_sodom.publish(_stamped_odom(0.0, 5.1))
+        _pump(ex, 15)
+        har.p_safety.publish(Bool(data=True))
+        _pump_for(ex, 1.0)                                  # give the tick time to (not) alert
+        assert 'STOP-SKEW' not in (har.last_alert or ''), \
+            "near-simultaneous stops must not alert just because header clock domains differ"
     finally:
         ex.shutdown()
         sup.destroy_node()
@@ -244,28 +330,34 @@ def _stamped_cmd(vx: float, t: float) -> TwistStamped:
 
 class LatencyHarness(Node):
     """Publishes agreeing real/sim poses (so the streams are fresh and in-tolerance) while the test
-    drives /cmd_vel and /dt/odom_active stamps by hand to force a specific command->motion latency."""
+    drives /cmd_vel and /dt/odom_active by hand to force a specific command->motion latency."""
     def __init__(self) -> None:
         super().__init__('sync_latency_harness')
         self.last_alert: str | None = None
         self.last_latency: float | None = None
+        self.alert_count = 0
         self.p_real = self.create_publisher(PoseStamped, '/dt/real_pose', 10)
         self.p_sim = self.create_publisher(PoseStamped, '/dt/sim_pose', 10)
         self.p_cmd = self.create_publisher(TwistStamped, '/cmd_vel', 10)
         self.p_odom = self.create_publisher(Odometry, '/dt/odom_active', 10)
-        self.create_subscription(String, '/dt/alerts', lambda m: setattr(self, 'last_alert', m.data), 10)
+        self.create_subscription(String, '/dt/alerts', self._on_alert, 10)
         self.create_subscription(Float64, '/dt/latency_ms', lambda m: setattr(self, 'last_latency', m.data), 10)
         self.create_timer(1.0 / 30.0, self._tick)
+
+    def _on_alert(self, m) -> None:
+        self.last_alert = m.data
+        self.alert_count += 1
 
     def _tick(self) -> None:
         self.p_real.publish(_pose(0.0, 0.0, 0.0))    # both worlds agree -> only LATENCY can alert
         self.p_sim.publish(_pose(0.0, 0.0, 0.0))
 
 
-def test_latency_over_budget_alerts(tmp_path):
+def test_latency_over_budget_alerts_exactly_once(tmp_path):
     """A command->motion latency beyond latency_budget_ms must raise a LATENCY /dt/alerts (Rubric ②
-    tolerance), not merely be measured. Deterministic stamps: command at t=100.0, motion at t=100.5
-    -> 500 ms > the 250 ms budget."""
+    tolerance) — and exactly ONCE per measured sample: one slow command must not flood /dt/alerts
+    at the 5 Hz tick rate until the next motion onset (the sample is consumed one-shot). Latency is
+    arrival-clock, so the 'slow robot' is a real ~0.4 s wall-time gap between command and motion."""
     rclpy.init()
     sup = SyncSupervisor(parameter_overrides=[
         Parameter('mode', Parameter.Type.STRING, 'sim_only'),
@@ -279,13 +371,46 @@ def test_latency_over_budget_alerts(tmp_path):
     ex.add_node(har)
     try:
         _pump(ex, 15)                                   # poses start flowing -> stream_ok
-        har.p_cmd.publish(_stamped_cmd(0.3, 100.0))     # command motion onset at t=100.0
-        _pump(ex, 5)
-        har.p_odom.publish(_stamped_odom(0.3, 100.5))   # robot actually moves at t=100.5 -> 500 ms
+        har.p_cmd.publish(_stamped_cmd(0.3, 100.0))     # command...
+        _pump_for(ex, 0.40)                             # ...the robot takes ~400 ms of WALL time
+        har.p_odom.publish(_stamped_odom(0.3, 100.0))   # ...to actually move -> ~400 ms > 250
         got = _spin_until(ex, lambda: 'LATENCY' in (har.last_alert or ''), secs=4.0)
         assert got, "a latency beyond the documented budget must raise /dt/alerts"
-        assert har.last_latency is not None and har.last_latency >= 499.0, \
-            f"measured latency should be ~500 ms, got {har.last_latency}"
+        assert har.last_latency is not None and har.last_latency >= 300.0, \
+            f"measured latency should be ~400 ms, got {har.last_latency}"
+        count_at_alert = har.alert_count
+        _pump_for(ex, 1.5)                              # ~7 more sync ticks
+        assert har.alert_count == count_at_alert, \
+            "one over-budget sample must alert ONCE, not every 5 Hz tick"
+    finally:
+        ex.shutdown()
+        sup.destroy_node()
+        har.destroy_node()
+        rclpy.shutdown()
+
+
+def test_out_of_tolerance_alert_is_edge_triggered_not_tick_spam(tmp_path):
+    """A PERSISTING out-of-tolerance condition re-alerts at most every alert_repeat_s (edge-trigger
+    + repeat throttle), never at the raw 5 Hz tick rate."""
+    rclpy.init()
+    sup = SyncSupervisor(parameter_overrides=[
+        Parameter('mode', Parameter.Type.STRING, 'sim_only'),
+        Parameter('alert_repeat_s', Parameter.Type.DOUBLE, 5.0),
+        Parameter('sync_log_enable', Parameter.Type.BOOL, False),
+        Parameter('sync_log_dir', Parameter.Type.STRING, str(tmp_path)),
+    ])
+    har = Harness()
+    har.sim = (0.5, 0.0, 0.0)        # 50 cm >> 15 cm tolerance, persisting
+    ex = SingleThreadedExecutor()
+    ex.add_node(sup)
+    ex.add_node(har)
+    try:
+        ok = _spin_until(ex, lambda: 'OUT-OF-TOLERANCE' in (har.last_alert or ''), secs=4.0)
+        assert ok
+        count_at_alert = har.alert_count
+        _pump_for(ex, 1.5)           # ~7 sync ticks while still out of tolerance
+        assert har.alert_count <= count_at_alert, \
+            "a persisting condition must not re-alert within alert_repeat_s"
     finally:
         ex.shutdown()
         sup.destroy_node()

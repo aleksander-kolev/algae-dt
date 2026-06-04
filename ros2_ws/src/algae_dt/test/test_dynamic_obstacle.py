@@ -82,6 +82,44 @@ def test_rejects_unsafe_entity_name():
         rclpy.shutdown()
 
 
+def test_keepout_clamps_an_amplitude_that_would_sweep_the_robot_spawn():
+    """The <static> box is TELEPORTED (no collision response): a sweep along x about (0.6,0)
+    +/-0.6 m passes straight through the robot spawn (0,0). The amplitude must be clamped so the
+    swept segment keeps >= keepout_radius_m clearance (0.6 - 0.3 = 0.3)."""
+    rclpy.init()
+    try:
+        node = DynamicObstacle(parameter_overrides=[
+            Parameter('spawn', Parameter.Type.BOOL, False),
+            Parameter('axis', Parameter.Type.STRING, 'x'),
+            Parameter('amplitude', Parameter.Type.DOUBLE, 0.6),
+        ])
+        assert abs(node.amplitude - 0.30) < 1e-6, \
+            f"amplitude must be clamped to keep the 0.30 m keep-out (got {node.amplitude})"
+        assert not node._refused
+        node.destroy_node()
+    finally:
+        rclpy.shutdown()
+
+
+def test_keepout_refuses_a_centre_on_top_of_the_robot_spawn():
+    """A sweep CENTRE inside the keep-out cannot be saved by clamping: the node must refuse to
+    spawn/teleport entirely (and say so), never shove the box into the robot."""
+    rclpy.init()
+    try:
+        node = DynamicObstacle(parameter_overrides=[
+            Parameter('center_x', Parameter.Type.DOUBLE, 0.1),
+            Parameter('amplitude', Parameter.Type.DOUBLE, 0.6),
+        ])
+        assert node._refused and node.do_spawn is False
+        calls = []
+        node._gz = lambda *a, **kw: calls.append(a) or True
+        node._tick()
+        assert calls == [], "a refused obstacle must never issue gz calls"
+        node.destroy_node()
+    finally:
+        rclpy.shutdown()
+
+
 def test_set_pose_failure_rearms_spawn():
     """A confirmed-spawned obstacle whose set_pose then keeps failing (e.g. a world reset removed the
     entity) must NOT freeze silently: after _SET_POSE_REFRESH_AFTER consecutive failures the node

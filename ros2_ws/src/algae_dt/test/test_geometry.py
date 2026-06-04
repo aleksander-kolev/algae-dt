@@ -39,8 +39,33 @@ def test_pixel_world_pixel_is_identity():
         assert g.world_to_pixel(x, y, MAP) == (col, row), f"round-trip lost ({col},{row})"
 
 
+def test_world_to_pixel_negative_band_is_out_of_bounds():
+    # The sub-cell strip just below/left of the origin must map OUT of bounds. int() truncated
+    # -0.4 to 0 and landed an off-map point on a valid edge cell; floor must give -1 / height_px.
+    mi = g.MapInfo(resolution=0.05, origin_x=0.0, origin_y=0.0, width_px=20, height_px=20)
+    col, row = g.world_to_pixel(-0.02, -0.02, mi)
+    assert col == -1
+    assert row == 20            # below origin_y -> one past the bottom row
+
+
 def test_euclidean():
     assert math.isclose(g.euclidean(0.0, 0.0, 3.0, 4.0), 5.0)
+
+
+def test_pose_xyyaw_duck_typed():
+    class _V:                       # geometry_msgs-shaped stand-ins (no ROS import in pure tests)
+        def __init__(self, **kw): self.__dict__.update(kw)
+    pose = _V(position=_V(x=1.0, y=-2.0),
+              orientation=_V(z=math.sin(0.25), w=math.cos(0.25)))   # yaw 0.5
+    x, y, yaw = g.pose_xyyaw(pose)
+    assert (x, y) == (1.0, -2.0) and math.isclose(yaw, 0.5, abs_tol=1e-9)
+
+
+def test_map_info_from_params_reads_the_standard_keys():
+    vals = {'map_resolution': 0.1, 'map_origin_x': -1.0, 'map_origin_y': -2.0,
+            'map_width_px': 50, 'map_height_px': 60}
+    mi = g.map_info_from_params(lambda name, default: vals.get(name, default))
+    assert mi == g.MapInfo(0.1, -1.0, -2.0, 50, 60)
 
 
 def test_compose_pose_2d_identity():

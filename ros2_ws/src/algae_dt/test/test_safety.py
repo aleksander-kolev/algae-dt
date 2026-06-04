@@ -164,6 +164,74 @@ def test_gate_sim_only_ignores_absent_real_but_honors_sim_obstacle():
     assert safety.gate(real, sim, stop_distance_m=0.25, max_data_age_s=1.0) is True
 
 
+def test_gate_sim_scan_gets_its_own_looser_staleness_budget():
+    # `both` mode: the WSL-rendered sim LiDAR runs ~2.5-3.5 Hz, so a sim frame 1.5 s old is normal.
+    # With a per-world budget the REAL robot is not nuisance-stopped by it...
+    real = _status(front_min=3.0, age_s=0.1)
+    sim = _status(front_min=3.0, age_s=1.5)
+    assert safety.gate(real, sim, stop_distance_m=0.25, max_data_age_s=1.0,
+                       sim_max_data_age_s=2.0) is False
+    # ...but a sim scan beyond ITS budget still fail-safes to blocked,
+    sim_stale = _status(front_min=3.0, age_s=2.5)
+    assert safety.gate(real, sim_stale, stop_distance_m=0.25, max_data_age_s=1.0,
+                       sim_max_data_age_s=2.0) is True
+    # ...and the REAL scan keeps the TIGHT budget regardless.
+    real_stale = _status(front_min=3.0, age_s=1.5)
+    sim_fresh = _status(front_min=3.0, age_s=0.1)
+    assert safety.gate(real_stale, sim_fresh, stop_distance_m=0.25, max_data_age_s=1.0,
+                       sim_max_data_age_s=2.0) is True
+
+
+def test_gate_default_sim_budget_equals_real_budget():
+    real = _status(front_min=3.0, age_s=0.1)
+    sim = _status(front_min=3.0, age_s=1.5)
+    assert safety.gate(real, sim, stop_distance_m=0.25, max_data_age_s=1.0) is True
+
+
+# --------------------------- front_min_from_scan ----------------------------
+# The bounds-clamped LaserScan wrapper shared by the mediator and sync_supervisor.
+
+class _Scan:
+    def __init__(self, ranges, range_min=0.12, range_max=3.5, angle_min=-0.5, angle_increment=0.1):
+        self.ranges = ranges
+        self.range_min = range_min
+        self.range_max = range_max
+        self.angle_min = angle_min
+        self.angle_increment = angle_increment
+
+
+def test_front_min_from_scan_uses_scan_fields():
+    r = _flat_scan()
+    r[5] = 0.8
+    assert math.isclose(safety.front_min_from_scan(_Scan(r), SECTOR, RMIN, RMAX), 0.8)
+
+
+def test_front_min_from_scan_clamps_a_too_small_range_min():
+    # A driver reporting range_min=0.05 must NOT widen the admitted window: a 0.08 'return' is
+    # sub-spec noise on the LDS-02 and may not block the robot.
+    r = _flat_scan()
+    r[5] = 0.08
+    r[6] = 1.5
+    fm = safety.front_min_from_scan(_Scan(r, range_min=0.05), SECTOR, RMIN, RMAX)
+    assert math.isclose(fm, 1.5)
+
+
+def test_front_min_from_scan_clamps_a_too_small_range_max():
+    # A driver reporting range_max=10 must not admit beyond-spec returns either: with every other
+    # beam invalid (0.0 sentinel), the lone 5.0 m return must be dropped by the clamped 3.5 m max.
+    r = [0.0] * 11
+    r[5] = 5.0     # beyond the LDS-02 3.5 m spec
+    fm = safety.front_min_from_scan(_Scan(r, range_max=10.0), SECTOR, RMIN, RMAX)
+    assert fm == INF
+
+
+def test_front_min_from_scan_zero_fields_fall_back_to_config():
+    r = _flat_scan()
+    r[5] = 0.8
+    fm = safety.front_min_from_scan(_Scan(r, range_min=0.0, range_max=0.0), SECTOR, RMIN, RMAX)
+    assert math.isclose(fm, 0.8)
+
+
 # ------------------------------ limit_command ------------------------------
 # Pure command-shaping the mediator applies every cycle: clamp to the Burger limits, zero forward
 # when the gate blocks (rotation still allowed), and full-stop on E-STOP.

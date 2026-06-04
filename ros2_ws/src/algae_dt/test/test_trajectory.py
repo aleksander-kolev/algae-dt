@@ -20,3 +20,36 @@ def test_oscillate_axis_x():
 
 def test_oscillate_zero_period_is_static():
     assert tr.oscillate(3.3, 1.0, 2.0, amplitude=0.5, period=0.0, axis='y') == (1.0, 2.0)
+
+
+# ------------------------- keep-out (teleported demo box) -------------------------
+
+def test_sweep_clearance_point_beside_the_swept_segment():
+    # Sweep along y about (1,0) +/-1: closest approach to the origin is the x distance, 1.0.
+    assert math.isclose(tr.sweep_clearance(0.0, 0.0, 1.0, 0.0, 1.0, 'y'), 1.0)
+
+
+def test_sweep_clearance_point_beyond_the_segment_end():
+    # Sweep along x about (2,0) +/-0.5 -> segment [1.5, 2.5]; from the origin the nearest end is 1.5.
+    assert math.isclose(tr.sweep_clearance(0.0, 0.0, 2.0, 0.0, 0.5, 'x'), 1.5)
+
+
+def test_sweep_clearance_zero_amplitude_is_point_distance():
+    assert math.isclose(tr.sweep_clearance(0.0, 0.0, 3.0, 4.0, 0.0, 'y'), 5.0)
+
+
+def test_clamp_amplitude_passes_a_safe_sweep_through():
+    assert tr.clamp_amplitude_for_keepout(0.0, 0.0, 0.6, 0.0, 0.6, 'y', 0.30) == 0.6
+
+
+def test_clamp_amplitude_shrinks_an_unsafe_sweep():
+    # Sweep along x about (0.6,0) +/-0.6 reaches x=0.0 (the robot spawn). Clamped so the swept
+    # segment keeps >= 0.30 m from the origin: max amplitude = 0.6 - 0.30 = 0.30.
+    out = tr.clamp_amplitude_for_keepout(0.0, 0.0, 0.6, 0.0, 0.6, 'x', 0.30)
+    assert out is not None
+    assert math.isclose(out, 0.30, abs_tol=1e-6)
+    assert tr.sweep_clearance(0.0, 0.0, 0.6, 0.0, out, 'x') >= 0.30 - 1e-9
+
+
+def test_clamp_amplitude_refuses_a_centre_inside_the_keepout():
+    assert tr.clamp_amplitude_for_keepout(0.0, 0.0, 0.1, 0.0, 0.6, 'y', 0.30) is None

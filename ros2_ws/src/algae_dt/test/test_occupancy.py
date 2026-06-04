@@ -20,12 +20,12 @@ def _grid(rows: list[str]) -> occupancy.Grid:
 
 # --------------------------------------------------------------- from_pgm
 def test_from_pgm_classifies_free_only_below_free_thresh():
-    # negate=0 => occ = (255-px)/255. occupied_thresh=0.65, free_thresh=0.196.
+    # negate=0 => occ = (255-px)/255, free iff occ < free_thresh (map_server rule).
     #   px=0   -> occ=1.00 -> occupied (not free)
     #   px=128 -> occ=0.498 -> unknown  (not free)
     #   px=255 -> occ=0.00 -> free
     img = pgm.Pgm(width=3, height=1, maxval=255, pixels=bytes([0, 128, 255]))
-    grid = occupancy.from_pgm(img, occupied_thresh=0.65, free_thresh=0.196, negate=0)
+    grid = occupancy.from_pgm(img, free_thresh=0.196, negate=0)
     assert grid.width == 3 and grid.height == 1
     assert grid.free == (False, False, True)
 
@@ -33,8 +33,15 @@ def test_from_pgm_classifies_free_only_below_free_thresh():
 def test_from_pgm_unknown_value_is_not_free():
     # px=205 is the conventional "unknown" grey: occ=0.196, NOT strictly < free_thresh -> blocked.
     img = pgm.Pgm(width=1, height=1, maxval=255, pixels=bytes([205]))
-    grid = occupancy.from_pgm(img, occupied_thresh=0.65, free_thresh=0.196, negate=0)
+    grid = occupancy.from_pgm(img, free_thresh=0.196, negate=0)
     assert grid.free == (False,)
+
+
+def test_from_pgm_negate_inverts_the_scale():
+    # negate=1 => occ = px/255: a BLACK pixel is now free, a WHITE one occupied.
+    img = pgm.Pgm(width=2, height=1, maxval=255, pixels=bytes([0, 255]))
+    grid = occupancy.from_pgm(img, free_thresh=0.196, negate=1)
+    assert grid.free == (True, False)
 
 
 # --------------------------------------------------------------- is_free
@@ -72,11 +79,25 @@ def test_nearest_clear_projects_off_the_wall():
             "#........#",
             "##########"]
     grid = _grid(rows)
-    # (1,1) hugs the top+left walls -> not clear at 1.5 px; the nearest clear cell must be off the wall
-    res = occupancy.nearest_clear_cell(grid, 1, 1, clearance_px=1.5, max_radius_px=4.0)
+    # (1,1) hugs the top+left walls -> not clear at 1.0 px (a wall cell sits 1.0 px away, within
+    # the edge-aware 1.0+0.5 radius); the nearest clear cell must be off the wall.
+    res = occupancy.nearest_clear_cell(grid, 1, 1, clearance_px=1.0, max_radius_px=4.0)
     assert res is not None
     assert res != (1, 1)
-    assert occupancy.clear_radius_ok(grid, res[0], res[1], clearance_px=1.5)
+    assert occupancy.clear_radius_ok(grid, res[0], res[1], clearance_px=1.0)
+
+
+def test_clear_radius_counts_the_obstacle_cells_edge():
+    # An obstacle CELL is a 1x1 square: its edge is up to 0.5 px nearer than its centre, so the
+    # disqualifying radius is clearance+0.5. An obstacle centre at 2.24 px (dc=2,dr=1) must FAIL a
+    # 2.0 px clearance (2.24 <= 2.5) even though its CENTRE is beyond 2.0 — the centre-only rule
+    # let projected goals sit ~half a cell deeper into the wall than promised.
+    rows = ["." * 9] * 9
+    rows = [list(r) for r in rows]
+    rows[5][6] = '#'                       # obstacle at (col=6, row=5)
+    grid = _grid([''.join(r) for r in rows])
+    assert occupancy.clear_radius_ok(grid, 4, 4, clearance_px=2.0) is False   # 2.24 <= 2.5
+    assert occupancy.clear_radius_ok(grid, 4, 4, clearance_px=1.5) is True    # 2.24 >  2.0
 
 
 def test_nearest_clear_none_when_boxed_in():
@@ -116,3 +137,13 @@ def test_reachable_goal_offmap_target_returns_none():
     grid = _grid(["." * 20] * 20)
     mi = _map_info()
     assert occupancy.reachable_goal(grid, mi, 99.0, 99.0, clearance_m=0.10, max_projection_m=0.25) is None
+
+
+def test_reachable_goal_offmap_negative_band_returns_none():
+    # The sub-cell strip just below/left of the origin: int() truncation used to map (-0.02,-0.02)
+    # onto a VALID edge cell and hand Nav2 a goal for an off-map bloom. floor + the explicit bounds
+    # check must reject it.
+    grid = _grid(["." * 20] * 20)
+    mi = _map_info()
+    assert occupancy.reachable_goal(grid, mi, -0.02, -0.02,
+                                    clearance_m=0.10, max_projection_m=0.25) is None

@@ -224,6 +224,46 @@ def test_command_output_is_stamped_with_populated_header(world):
         "mediator /cmd_vel must carry a populated header stamp (the TwistStamped contract)"
 
 
+def test_battery_estop_latches_until_resume(world):
+    """The battery auto-E-STOP is LATCHED: a sagging LiPo that bounces back above the critical
+    threshold must NOT silently un-latch and re-enable motion. Only an operator RESUME
+    (estop_cmd False) clears it — and a still-critical battery immediately re-trips."""
+    from std_msgs.msg import Float64
+    har, ex = world
+    p_batt = har.create_publisher(BatteryState, '/battery_state', 10)
+
+    def _v(v: float) -> BatteryState:
+        b = BatteryState()
+        b.voltage = float(v)
+        return b
+
+    # Trip: below critical (10.5).
+    assert _spin_until(ex, lambda: har.last_estop is False)        # starts clear
+    p_batt.publish(_v(10.0))
+    assert _spin_until(ex, lambda: har.last_estop is True), "critical battery must auto-E-STOP"
+    # Recover: voltage bounces back up. The latch must HOLD (this was the silent un-latch bug).
+    p_batt.publish(_v(12.0))
+    _spin_until(ex, lambda: False, secs=0.8)                        # give it time to (not) clear
+    assert har.last_estop is True, "battery E-STOP must stay latched when the voltage recovers"
+    # Operator RESUME clears it (battery is healthy now, so it stays cleared).
+    har.p_estop.publish(Bool(data=False))
+    assert _spin_until(ex, lambda: har.last_estop is False), "RESUME must clear the battery latch"
+
+
+def test_sim_battery_override_forces_the_auto_estop_demo_beat(world):
+    """The sim_only synthetic battery floors ABOVE critical by design, so the DEMO_SCRIPT
+    battery->auto-E-STOP beat is triggered via /dt/battery_override_v; <=0 clears the override."""
+    from std_msgs.msg import Float64
+    har, ex = world
+    p_over = har.create_publisher(Float64, '/dt/battery_override_v', 10)
+    assert _spin_until(ex, lambda: har.last_health is not None and har.last_health.voltage > 11.0)
+    p_over.publish(Float64(data=10.0))                              # force below critical (10.5)
+    ok = _spin_until(ex, lambda: har.last_estop is True
+                     and har.last_health is not None
+                     and abs(har.last_health.voltage - 10.0) < 1e-6, secs=5.0)
+    assert ok, "the override must drive /dt/health AND trip the latched auto-E-STOP"
+
+
 def test_both_mode_sim_pose_lifted_to_map_frame_via_tf():
     """In `both`, /dt/sim_pose must be lifted into the MAP frame using the same map<-odom as the real
     robot, so it is directly comparable to /dt/real_pose — not published raw in the sim's odom frame

@@ -24,3 +24,8 @@ sync_metrics_*.csv
 # Secrets — real lab-laptop credentials go in CREDENTIALS.txt (added to the zip manually, never committed)
 CREDENTIALS.txt
 *.mp4
+
+# Local working artifacts (review digests, lineage worktrees)
+.review-digest.txt
+.reconcile-*.diff
+.worktrees/

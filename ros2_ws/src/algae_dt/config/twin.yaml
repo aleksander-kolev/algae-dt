@@ -18,8 +18,15 @@
     # --- safety / motion (Rubric ③, course 25 cm dual-LiDAR stop) ---
     stop_distance_m: 0.25          # course Lidar-DT spec. Rationale: >LDS-02 min (0.12) + footprint
                                    # margin; matches the course mini-project so behaviour is comparable.
+                                   # KNOWN BLIND SPOT: the LDS-02 reports anything closer than its
+                                   # 0.12 m range_min as 0.0 = "no return", indistinguishable from
+                                   # empty space — the gate cannot see inside 12 cm (documented in
+                                   # lib/safety.py; a normal approach stops at 25 cm long before).
     front_sector_rad: 0.70         # FULL cone width treated as "ahead" (= +/-0.35 rad half-angle).
                                    # safety.front_min_range MUST treat this as full-width (test pins it).
+                                   # SCOPE: the 25 cm guarantee covers this +/-20 deg cone, NOT the
+                                   # robot's front corners — an obstacle at e.g. 30 deg and 0.20 m is
+                                   # ungated by design (course value; corners are Nav2 costmap's job).
     max_linear_mps: 0.22           # Burger hardware max forward speed; the mediator clamps Nav2's
                                    # planned max_speed_xy (0.3) down to this real limit (correct, expected).
     max_angular_radps: 2.84        # mediator's FINAL angular clamp (safety authority) = the Burger
@@ -39,6 +46,11 @@
     # --- staleness windows (fail-safe: stale considered-scan => blocked) ---
     max_cmd_age_s: 0.5
     max_data_age_s: 1.0
+    sim_max_data_age_s: 2.0       # looser budget for the MIRROR sim scan in `both` only: the WSL/
+                                  # GPU-less sim LiDAR runs ~2.5-3.5 Hz, and one delayed sim frame
+                                  # past the real 1.0 s budget would nuisance-stop the REAL robot
+                                  # via the OR-gate. The real (safety-critical) scan keeps 1.0 s.
+                                  # Matches the 2.0 s the launch grants Nav2's collision_monitor.
 
     # --- STATE SYNC & TOLERANCES (Rubric ②: documented thresholds + alerts) ---
     tol_pose_xy_m: 0.15           # real-vs-sim XY tol. Rationale: ~AMCL/odom noise floor on the
@@ -49,13 +61,26 @@
                                   # + DDS/Wi-Fi over AP2IRR10; >250 ms means a real desync to flag.
     stop_skew_ms: 300.0           # max allowed real-stop vs sim-stop time skew on a safety event
                                   # (Rubric ③ "synchronous" — measured, logged to CSV, AND alerted).
-    sync_pose_timeout_s: 2.0      # if either world's pose stream is silent/stale this long, the
-                                  # supervisor fails loud (sync_ok False + /dt/alerts) rather than going dark.
+    sync_pose_timeout_s: 2.0      # if a REQUIRED pose stream is silent/stale this long, the
+                                  # supervisor fails loud (sync_ok False + /dt/alerts) rather than
+                                  # going dark. Required = real always; sim only in sim_only/both
+                                  # (real_only has no sim world — requiring it spammed alerts 5 Hz
+                                  # all session and starved the CSV).
+    alert_repeat_s: 5.0           # /dt/alerts are edge-triggered; while a condition STAYS true it
+                                  # re-alerts at most this often (was: every 5 Hz tick = alert flood).
     sync_log_csv: "sync_metrics"  # CSV prefix; sync_supervisor appends <prefix>_<stamp>.csv
     sync_log_enable: true
-    # command->motion latency method (PLAN T3.1): the mediator stamps every gated /cmd_vel it emits;
-    # sync_supervisor marks motion onset when |odom.twist.linear|>motion_eps_mps OR
-    # |angular|>motion_eps_radps, and reports t_motion - t_cmd (clock per mode: sim time in sim_only).
+    sync_log_dir: "."             # where the Rubric-② evidence CSV lands. '.' = the launch CWD
+                                  # (= /ws inside the course container). Set an absolute path for a
+                                  # fixed evidence location on the lab laptop.
+    sync_log_max_rows: 36000      # ~2 h at 5 Hz, then logging stops with a warning — a forgotten
+                                  # node can't fill the (factory-reset-prone) lab disk unbounded.
+    # command->motion latency method (PLAN T3.1): sync_supervisor timestamps the rising
+    # command-motion edge of /cmd_vel and the matching motion onset of /dt/odom_active
+    # (|odom.twist.linear|>motion_eps_mps OR |angular|>motion_eps_radps) BOTH on its OWN clock at
+    # message arrival, and reports the difference. ONE observer clock = one time base: header
+    # stamps were abandoned because they cross clock domains (Pi wall clock vs laptop wall clock —
+    # un-synced over lab Wi-Fi — vs gz sim time) and measured the clock offset, not the latency.
     motion_eps_mps: 0.02
     motion_eps_radps: 0.05
     # sim_only sync source (PLAN T3.1 / RUBRIC ②): with no real robot, the "shadow real pose" is the
@@ -73,7 +98,11 @@
     # OWNED by twin_mediator (publishes /dt/health from this when mode==sim_only):
     battery_sim_start_v: 12.5
     battery_sim_drain_vps: 0.02
-    battery_sim_min_v: 11.2        # stays green; demo only
+    battery_sim_min_v: 11.2        # natural drain floors HERE — above critical (10.5) on purpose, so
+                                   # an ordinary sim run never auto-E-STOPs itself. The DEMO_SCRIPT
+                                   # battery->auto-E-STOP beat is triggered explicitly instead:
+                                   #   ros2 topic pub --once /dt/battery_override_v std_msgs/msg/Float64 "{data: 10.0}"
+                                   # (mediator-owned override, sim_only only; <=0 clears it).
 
     # --- mission / spray (Rubric ③ task interaction) ---
     spray_revolutions: 3.0         # chemical spraying = this many FULL in-place spins at the bloom
@@ -84,10 +113,15 @@
                                    # wall-clock spin rate is omega*RTF, so omega=1.0 looked like a slow
                                    # drift (~0.5 rad/s real). 2.8 -> ~1.4 rad/s real = a brisk, visible
                                    # spin; the closed-loop still guarantees exactly spray_revolutions turns.
-    spray_time_margin: 2.0         # spray is CLOSED-LOOP on odom yaw (spins until the robot has truly
-                                   # turned spray_revolutions*360, not a fixed time, so a throttled/
-                                   # slow sim still completes the full count). Backstop = this x the
-                                   # nominal spin time, so a stalled odom can't spin forever.
+    spray_stall_timeout_s: 3.0     # PRIMARY anti-stall guard: abort the spray when odom yaw has not
+                                   # advanced for this many WALL seconds (frozen odom must not spin
+                                   # forever). Unlike a total-time backstop it never fires on a
+                                   # merely SLOW sim — any real-time-factor finishes the count as
+                                   # long as yaw keeps moving.
+    spray_time_margin: 6.0         # belt-and-braces absolute cap = this x the nominal spin time.
+                                   # 6.0 covers real-time-factors down to ~0.17 (the old 2.0 had ZERO
+                                   # headroom at the documented RTF~0.5 and skipped healthy blooms).
+                                   # The spray itself is CLOSED-LOOP on odom yaw (true full count).
     bloom_radius_m: 0.15           # drawn marker radius + mission bookkeeping (operator_gui/mission)
     center_tol_m: 0.50             # GROSS arrival sanity bound (sim_only only); Nav2 xy_goal_tolerance
                                    # (0.15) is authoritative. Generous so deceleration pose-lag never
@@ -101,6 +135,11 @@
                                    # 0.105 m + margin > the 0.25 m safety-gate stop, so the projected
                                    # approach pose is reachable AND clear of the forward-stop gate.
     nav_goal_timeout_s: 60.0
+
+    # --- dynamic obstacle (pillar-III live-change demo tool; launch arg use_dynamic_obstacle) ---
+    keepout_radius_m: 0.30         # the <static> box is TELEPORTED (no collision response), so its
+                                   # sweep is clamped to keep this clearance from the robot spawn
+                                   # (0,0); a centre inside the keep-out refuses to spawn at all.
 
     # --- map (course mapFiles.zip base map; verified 86x110 @ 0.05 m/px) ---
     map_resolution: 0.05

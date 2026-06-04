@@ -12,7 +12,7 @@ import pytest
 
 rclpy = pytest.importorskip("rclpy")
 
-from geometry_msgs.msg import TwistStamped              # noqa: E402
+from geometry_msgs.msg import PoseStamped, TwistStamped  # noqa: E402
 from nav2_simple_commander.robot_navigator import TaskResult   # noqa: E402
 from nav_msgs.msg import Odometry                        # noqa: E402
 from rclpy.executors import SingleThreadedExecutor       # noqa: E402
@@ -33,11 +33,13 @@ class FakeNavigator:
     goToPose returns goal-acceptance (False = rejected, like a goal in collision), and
     waitUntilNav2Active may raise (the reused-navigator failure that breaks the 2nd mission)."""
 
-    def __init__(self, outcomes, complete_after=1, accept=True, raise_on_active=False):
+    def __init__(self, outcomes, complete_after=1, accept=True, raise_on_active=False,
+                 raise_on_go=False):
         self.outcomes = list(outcomes)
         self.complete_after = complete_after
         self.accept = accept                  # goToPose acceptance (real BasicNavigator returns bool)
         self.raise_on_active = raise_on_active  # simulate waitUntilNav2Active blowing up on reuse
+        self.raise_on_go = raise_on_go          # simulate goToPose throwing (action-server fault)
         self._i = -1
         self._polls = 0
         self.goals = []
@@ -48,6 +50,8 @@ class FakeNavigator:
             raise RuntimeError("simulated Nav2 readiness failure on the reused navigator")
 
     def goToPose(self, pose):
+        if self.raise_on_go:
+            raise RuntimeError("simulated goToPose action-server fault")
         self.goals.append(pose)
         self._i += 1
         self._polls = 0
@@ -87,13 +91,16 @@ class Harness(Node):
         self.max_omega = 0.0
         self.sim_yaw = 0.0              # simulated ACHIEVED robot yaw (published back on /dt/odom_active)
         self.rotation_gain = 1.0        # achieved/commanded rate; <1 models a robot that under-rotates
+        self.robot_xy = (0.0, 0.0)      # MAP-frame robot position fed back on /dt/sim_pose
         self._cmd_omega = 0.0           # latest commanded angular rate seen on /dt/cmd_vel_raw
         self._last_tick_t = None
+        self._tick_n = 0
 
         self.p_blooms = self.create_publisher(MarkerArray, '/dt/blooms', _latched())
         self.p_cmd = self.create_publisher(String, '/dt/mission_cmd', 10)
         self.p_estop = self.create_publisher(Bool, '/dt/estop', _latched())
         self.p_odom = self.create_publisher(Odometry, '/dt/odom_active', 10)
+        self.p_pose = self.create_publisher(PoseStamped, '/dt/sim_pose', 10)   # sim_only map pose
         self.create_subscription(MarkerArray, '/dt/markers', lambda m: setattr(self, 'last_markers', m), 10)
         self.create_subscription(String, '/dt/mission_state', lambda m: setattr(self, 'last_state', m.data), 10)
         self.create_subscription(TwistStamped, '/dt/cmd_vel_raw', self._on_spin, 10)
@@ -120,10 +127,20 @@ class Harness(Node):
                 m.pose.position.y = float(y)
                 arr.markers.append(m)
             self.p_blooms.publish(arr)
-        od = Odometry()                      # robot at origin, simulated achieved yaw
+        od = Odometry()                      # simulated achieved yaw (spray closed loop)
         od.pose.pose.orientation.z = math.sin(self.sim_yaw / 2.0)
         od.pose.pose.orientation.w = math.cos(self.sim_yaw / 2.0)
         self.p_odom.publish(od)
+        # MAP-frame pose at ~10 Hz (every 3rd tick): plenty for nearest/arrival, and it keeps the
+        # shared test executor from starving the 30 Hz odom feedback the spray closed loop needs
+        # (the loop over-rotates when its odom view lags behind the harness integration).
+        self._tick_n += 1
+        if self._tick_n % 3 == 0:
+            ps = PoseStamped()
+            ps.header.frame_id = 'map'
+            ps.pose.position.x, ps.pose.position.y = self.robot_xy
+            ps.pose.orientation.w = 1.0
+            self.p_pose.publish(ps)
 
     def send(self, cmd: str) -> None:
         self.p_cmd.publish(String(data=cmd))
@@ -464,5 +481,91 @@ def test_operator_stop_midnav_leaves_bloom_pending():
         assert _spin_until(ex, lambda: _markers_by_id(har).get(0) == B.PENDING), \
             "operator Stop mid-nav must leave the bloom PENDING (resumable, honest accounting)"
         assert har.max_omega == 0.0, "a stopped nav must NOT spray"
+    finally:
+        _teardown(runner, har, ex)
+
+
+def test_arrival_is_checked_against_the_projected_goal_not_the_raw_centre():
+    """REGRESSION (near-wall false-skip): the goal of a wall-hugging bloom is projected up to
+    center_tol_m away from the raw centre, and Nav2 stops within ITS tolerance of that projected
+    goal. The gross-arrival check must therefore measure against the PROJECTED goal: measured
+    against the raw centre, the worst case (projection + Nav2 tolerance > center_tol_m) skipped a
+    bloom that navigation genuinely reached."""
+    w, h = 40, 20
+    grid = occupancy.Grid(w, h, tuple(c >= 3 for r in range(h) for c in range(w)))   # wall cols 0-2
+    mi = geometry.MapInfo(resolution=0.05, origin_x=0.0, origin_y=0.0, width_px=w, height_px=h)
+    bx, by = geometry.pixel_to_world(3, 10, mi)        # bloom in the free cell hugging the wall
+    # complete_after=15 keeps Nav2 'driving' (~1.5 s of polls) so the harness has time to publish
+    # the robot's parked position before the arrival check runs.
+    nav = FakeNavigator([TaskResult.SUCCEEDED], complete_after=15)
+    runner, har, ex = _build(nav, [(bx, by)], grid=grid)
+    runner._map_info = mi
+    runner.goal_clearance_m = 0.40                     # forces a ~0.40 m projection off the wall
+    try:
+        assert _spin_until(ex, lambda: len(_markers_by_id(har)) == 1)
+        har.send('start')
+        assert _spin_until(ex, lambda: bool(nav.goals)), "a goal is sent"
+        gx, gy = nav.goals[0].pose.position.x, nav.goals[0].pose.position.y
+        assert geometry.euclidean(gx, gy, bx, by) > 0.30, "the goal really was projected far"
+        # The robot parks 0.14 m PAST the projected goal (within Nav2's own tolerance of it) —
+        # which puts it > center_tol_m from the RAW centre. Must still count as arrived.
+        har.robot_xy = (gx + 0.14, gy)
+        assert geometry.euclidean(gx + 0.14, gy, bx, by) > runner.center_tol_m
+        assert _spin_until(ex, lambda: _markers_by_id(har).get(0) == B.TREATED, secs=12), \
+            "arrival at the PROJECTED goal must treat the bloom (raw-centre check falsely skipped it)"
+    finally:
+        _teardown(runner, har, ex)
+
+
+def test_spray_stall_watchdog_fires_independent_of_the_time_cap():
+    """The PRIMARY spray guard is the odom-stall watchdog (no yaw progress for
+    spray_stall_timeout_s), not the total-time cap: a frozen odom must end the spray quickly even
+    when the absolute cap is still far away — and the bloom stays honestly un-treated."""
+    runner, har, ex = _build(FakeNavigator([TaskResult.SUCCEEDED]), [(0.1, 0.0)],
+                             spray_revolutions=1.0, spray_omega=4.0)
+    har.rotation_gain = 0.0              # commanded to spin, never actually turns
+    runner.spray_stall_timeout_s = 0.4   # quick watchdog...
+    runner.spray_time_margin = 60.0      # ...while the absolute cap is ~94 s away
+    try:
+        assert _spin_until(ex, lambda: len(_markers_by_id(har)) == 1)
+        har.send('start')
+        t0 = time.monotonic()
+        assert _spin_until(ex, lambda: _markers_by_id(har).get(0) == B.SKIPPED, secs=10), \
+            "a frozen odom must skip via the stall watchdog"
+        assert time.monotonic() - t0 < 8.0, "the watchdog, not the 94 s cap, must end the spray"
+    finally:
+        _teardown(runner, har, ex)
+
+
+def test_spray_completes_on_a_slow_sim_that_keeps_progressing():
+    """REGRESSION (RTF false-skip): a robot achieving only ~25% of the commanded rate — worse than
+    the documented worst-case RTF 0.5 that the old margin=2.0 backstop could not survive — must
+    still complete the full count and mark the bloom TREATED, because progress never stalls."""
+    revs, omega = 1.0, 12.0
+    runner, har, ex = _build(FakeNavigator([TaskResult.SUCCEEDED]), [(0.1, 0.0)],
+                             spray_revolutions=revs, spray_omega=omega)
+    har.rotation_gain = 0.25
+    try:
+        assert _spin_until(ex, lambda: len(_markers_by_id(har)) == 1)
+        har.send('start')
+        assert _spin_until(ex, lambda: _markers_by_id(har).get(0) == B.TREATED, secs=15), \
+            "slow-but-progressing rotation must finish the count, never be skipped by a time cap"
+        assert har.sim_yaw == pytest.approx(revs * 2.0 * math.pi, rel=0.2)
+    finally:
+        _teardown(runner, har, ex)
+
+
+def test_worker_crash_reverts_inflight_bloom_to_pending():
+    """A worker crash (e.g. the navigator throwing) must not leave the in-flight bloom stuck ACTIVE
+    (blue, looks in-progress forever): it reverts to PENDING so a re-Start resumes it honestly."""
+    runner, har, ex = _build(FakeNavigator([TaskResult.SUCCEEDED], raise_on_go=True), [(0.1, 0.0)])
+    try:
+        assert _spin_until(ex, lambda: len(_markers_by_id(har)) == 1)
+        har.send('start')
+        assert _spin_until(ex, lambda: har.last_state == 'idle'
+                           and not (runner._worker and runner._worker.is_alive()), secs=10), \
+            "the worker exits via the crash path and reports idle"
+        assert _spin_until(ex, lambda: _markers_by_id(har).get(0) == B.PENDING), \
+            "the in-flight bloom must be reverted to PENDING after a worker crash"
     finally:
         _teardown(runner, har, ex)

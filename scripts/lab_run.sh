@@ -9,7 +9,12 @@
 #   ./scripts/lab_run.sh             # full real+sim demo (robot #36 @ 192.168.8.36, domain 36)
 #   ./scripts/lab_run.sh --sim       # hardware-free sim_only fallback demo (no robot/DDS needed)
 #   ./scripts/lab_run.sh --rebuild   # clean colcon build first
+#   ./scripts/lab_run.sh --no-gz-gui # skip the gz 3D client (weak GL stack; RViz+console still show all)
 #   TB3_IMAGE=name / ROS_DOMAIN_ID=n / ROBOT_IP=ip   # overrides if image/robot differ
+#
+# RViz opens AUTOMATICALLY in both/real_only (the launch use_rviz default is mode-aware) — it is
+# REQUIRED there: the "2D Pose Estimate" click that seeds AMCL has no other UI. The --sim fallback
+# also opens RViz and skips the crash-prone gz 3D client (mirrors docker/open_sim.sh).
 #
 # WHAT IT REQUIRES (and ERRORS on if absent — `both` cannot exist without these):
 #   1. ROOTFUL Docker. `both` talks to the robot over ROS 2 DDS, which needs real `--net=host`
@@ -30,11 +35,22 @@ die() { log FATAL "$*"; exit 3; }
 # ---- args ----
 REBUILD=false
 MODE="both"        # default: the lab runner brings up the FULL real+sim demo
+GZ_GUI=true
 for a in "$@"; do case "$a" in
   --rebuild) REBUILD=true ;;
   --sim|--fallback) MODE="sim_only" ;;
-  *) die "unknown arg: $a   (use --sim for the hardware-free fallback demo, --rebuild for a clean build)" ;;
+  --no-gz-gui) GZ_GUI=false ;;
+  *) die "unknown arg: $a   (use --sim for the hardware-free fallback demo, --rebuild for a clean build, --no-gz-gui to skip the gz 3D client)" ;;
 esac; done
+
+# Launch args per mode. both/real_only: use_rviz auto-resolves to true (AMCL seeding needs it).
+# --sim: mirror docker/open_sim.sh — RViz on, gz 3D client off (its large OGRE2 VBO crashes weak
+# GL stacks; the gz SERVER still renders the LiDAR and the operator console + RViz show everything).
+if [ "$MODE" = sim_only ]; then
+  LAUNCH_ARGS="use_rviz:=true gz_gui:=false"
+else
+  LAUNCH_ARGS="gz_gui:=$GZ_GUI"
+fi
 
 # ---- paths / config ----
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -135,7 +151,7 @@ echo >&2
 exec docker run --rm -it --name "$CONTAINER" --net=host \
   "${X11_ARGS[@]}" \
   -v "$WS:/ws" -w /ws -e HOME=/ws \
-  -e TURTLEBOT3_MODEL=burger -e ROS_DOMAIN_ID="$DOMAIN" -e DT_MODE="$MODE" \
+  -e TURTLEBOT3_MODEL=burger -e ROS_DOMAIN_ID="$DOMAIN" -e DT_MODE="$MODE" -e DT_LAUNCH_ARGS="$LAUNCH_ARGS" \
   --user "$(id -u):$(id -g)" "$IMAGE" bash -lc '
     set -e
     source /opt/ros/jazzy/setup.bash
@@ -157,6 +173,7 @@ exec docker run --rm -it --name "$CONTAINER" --net=host \
     echo "-- colcon build --packages-select algae_dt --"
     colcon build --packages-select algae_dt
     source install/setup.bash
-    echo "-- ros2 launch algae_dt bringup.launch.py mode:=$DT_MODE --"
-    exec ros2 launch algae_dt bringup.launch.py mode:="$DT_MODE"
+    echo "-- ros2 launch algae_dt bringup.launch.py mode:=$DT_MODE $DT_LAUNCH_ARGS --"
+    # shellcheck disable=SC2086  # DT_LAUNCH_ARGS is a deliberate word-split list of launch args
+    exec ros2 launch algae_dt bringup.launch.py mode:="$DT_MODE" $DT_LAUNCH_ARGS
   '
