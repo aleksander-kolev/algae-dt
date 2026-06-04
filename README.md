@@ -66,7 +66,10 @@ algae-dt/
 │  ├─ demo_run.sh                 one-shot inside the container: build + launch sim_only with RViz
 │  └─ open_sim.sh                 sim_only with the Gazebo 3D window off (WSL GL workaround) + RViz
 ├─ scripts/
-│  ├─ lab_run.sh                  the lab-laptop runner: full real+sim (both), or --sim fallback
+│  ├─ lab_run.sh                  the lab-laptop runner: full real+sim (both), or --sim fallback;
+│  │                              auto-detects Docker vs the lab PC's native (no-Docker) stack
+│  ├─ lab_fix_workspace.sh        rebuild a broken/copied ~/turtlebot3_ws from a zip (no sudo)
+│  ├─ test_lab_fix_workspace.sh   container test suite for the recovery script (57 assertions)
 │  └─ Dockerfile                  fallback image the lab runner builds if none is present
 ├─ .gitattributes, .gitignore
 ```
@@ -171,11 +174,20 @@ ros2 launch algae_dt bringup.launch.py mode:=both use_fake_robot:=true
 
 ## Run on the lab laptop (real robot)
 
-On the lab HP Z-Book, everything runs inside the course `turtlebot3_ws` Docker container.
-`scripts/lab_run.sh` does the whole `both` demo (real Burger + Gazebo mirror) and fails clearly if
-it can't — it needs **rootful Docker** (the robot link is ROS 2 DDS over a real `--net=host`, which
-rootless can't do), a turtlebot3 image (it builds one from `scripts/Dockerfile` if none is present),
-and the robot reachable and publishing `/scan`.
+The lab HP Z-Book runs everything **natively — it has no Docker**: ROS 2 Jazzy at `/opt/ros/jazzy`
+with the turtlebot3 stack built from source in `~/turtlebot3_ws`. `scripts/lab_run.sh` does the
+whole `both` demo (real Burger + Gazebo mirror) and fails clearly if it can't — it auto-detects the
+runtime (native on the lab PC; on a Docker-capable machine it uses the container instead, where
+`both` needs *rootful* Docker for the robot's DDS traffic), and it requires the robot reachable and
+publishing `/scan`.
+
+If the laptop's `~/turtlebot3_ws` is broken — builds failing with another machine's paths in
+`CMakeCache.txt`, `PermissionError` on `install/**/local_setup.dsv`, a `turtlebot3_ws (Copy)`
+folder — recover it first (no sudo needed; uses the workspace zip in `~/Downloads`):
+
+```bash
+./scripts/lab_fix_workspace.sh
+```
 
 The robot we used last time: **#36 at `192.168.8.36`, `ROS_DOMAIN_ID=36`**, on Wi-Fi `AP2IRR10`,
 LiDAR LDS-02. The IP and number are on stickers on each robot; set `ROS_DOMAIN_ID` to the robot
@@ -196,14 +208,16 @@ ros2 launch turtlebot3_bringup robot.launch.py        # leave this running
 ./scripts/lab_run.sh --rebuild       # clean colcon build first
 ```
 
-Overrides if your robot/image differ: `ROBOT_IP=… ROS_DOMAIN_ID=… TB3_IMAGE=… ./scripts/lab_run.sh`.
+Overrides if your robot differs: `ROBOT_IP=… ROS_DOMAIN_ID=… ./scripts/lab_run.sh`. Force a
+runtime with `--native` / `--docker`.
 
-Teleop in another terminal (the script prints the exact line, remapped onto the safety bus):
+Teleop in another terminal (the script prints the exact line for the runtime it picked, remapped
+onto the safety bus — native version shown):
 
 ```bash
-docker exec -it turtlebot3_container bash -lc \
-  'source /opt/ros/jazzy/setup.bash; source /ws/install/setup.bash; \
-   ros2 run turtlebot3_teleop teleop_keyboard --ros-args -r /cmd_vel:=/dt/cmd_vel_raw'
+source /opt/ros/jazzy/setup.bash && source ~/turtlebot3_ws/install/setup.bash
+export ROS_DOMAIN_ID=36
+ros2 run turtlebot3_teleop teleop_keyboard --ros-args -r /cmd_vel:=/dt/cmd_vel_raw
 ```
 
 ### Set the robot's start pose (every real run)
@@ -282,6 +296,10 @@ the whole file to all nodes via the `/**` wildcard. Map metadata in `twin.yaml` 
   in. Place blooms a little away from walls.
 - **Workspace build complains about symlinks / a stale tree:**
   `rm -rf build/ install/ log/ && colcon build --packages-select algae_dt`.
+- **Workspace was copied from another machine** (CMake errors naming a foreign path,
+  `PermissionError` on `install/**.dsv`, a `turtlebot3_ws (Copy)` folder): a clean rebuild in place
+  is not enough — run `./scripts/lab_fix_workspace.sh` (no sudo; rebuilds `~/turtlebot3_ws` from
+  the workspace zip in `~/Downloads`, keeps your old dirs renamed aside, repairs `~/.bashrc`).
 
 ---
 
