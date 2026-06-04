@@ -96,8 +96,12 @@ green build + a run.** Build/test recipe: `docs/SETUP.md` §1 (container) or §2
 | `docs/COURSE_COVERAGE.md` | Every course artifact → where used. |
 
 ## Environment quick ref
-Everything runs in the course `turtlebot3_ws` Docker container (turtlebot3 is in the image, NOT the
-bare host — D1). **One command, from a fresh clone:** `./scripts/lab_run.sh --sim` (hardware-free sim demo at home) or
-`ROS_DOMAIN_ID=<robot#> ./scripts/lab_run.sh` (lab; full `both` real+sim demo) — it recreates `~/turtlebot3_ws`, copies
-the package, builds, and launches. Full flow + provenance: `docs/RUN_ON_LAB_PC.md`. Robot: Wi-Fi
-`AP2IRR10`, `ssh turtlebot@<ip>` → `turtlebot3_bringup robot.launch.py`.
+**Home** = the Docker container (`docker/run.sh`, image `algae-dt:dev`). **Lab PC = NATIVE, NO
+Docker (verified 2026-06):** ROS Jazzy at `/opt/ros/jazzy` + the turtlebot3 stack built FROM SOURCE
+in `~/turtlebot3_ws/src` — D1. **One command, from a fresh clone:** `./scripts/lab_run.sh --sim`
+(hardware-free sim demo) or `ROS_DOMAIN_ID=<robot#> ./scripts/lab_run.sh` (lab; full `both` real+sim
+demo) — it auto-detects the runtime (native on the lab PC; `--native` forces), copies the package,
+builds, and launches. Workspace broken/copied-from-another-PC → `./scripts/lab_fix_workspace.sh`
+(no sudo; rebuilds from the fail-safe zip in `~/Downloads`). Full flow + provenance:
+`docs/RUN_ON_LAB_PC.md`. Robot: Wi-Fi `AP2IRR10`, `ssh turtlebot@<ip>` →
+`turtlebot3_bringup robot.launch.py`.

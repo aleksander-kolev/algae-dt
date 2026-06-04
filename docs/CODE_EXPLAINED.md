@@ -417,13 +417,16 @@ so nobody changes one without the other.
 
 ## 8. Scripts and Docker tooling
 
-Everything runs inside a Docker image (`algae-dt:dev`) containing ROS 2 Jazzy + the TurtleBot3
-stack + Gazebo — so the host machine needs nothing but Docker.
+**At home** everything runs inside a Docker image (`algae-dt:dev`) containing ROS 2 Jazzy + the
+TurtleBot3 stack + Gazebo — the home machine needs nothing but Docker. **The lab PC is the
+opposite (verified 2026-06): it has NO Docker** — ROS 2 Jazzy is installed natively and the
+TurtleBot3 stack is built from source in `~/turtlebot3_ws`, so there the demo runs natively.
 
 | file | purpose |
 |---|---|
-| `scripts/lab_run.sh` | **The lab-laptop runner.** From a fresh clone: checks Docker is usable (and *rootful* — rootless Docker cannot reach the robot's network traffic), finds or builds the image, recreates the workspace, requires the real robot to be reachable and actually publishing `/scan` from inside the container, builds, and launches the full `both` demo (RViz included). `--sim` = hardware-free fallback; `--no-gz-gui` = skip the 3D window; `--rebuild` = clean build. It *refuses to start a half-demo*: if `both` can't run, it says exactly why. |
-| `scripts/Dockerfile` | Fallback image build for the lab if no turtlebot3 image exists. |
+| `scripts/lab_run.sh` | **The lab-laptop runner.** From a fresh clone: auto-detects the runtime — Docker where it exists (rootful required for `both`: rootless Docker cannot reach the robot's network traffic), otherwise **native** (the lab PC; `--native` forces it). Recreates the package in the workspace, requires the real robot to be reachable and actually publishing `/scan`, builds, and launches the full `both` demo (RViz included). `--sim` = hardware-free fallback; `--no-gz-gui` = skip the 3D window; `--rebuild` = clean build. It *refuses to start a half-demo*: if `both` can't run, it says exactly why. |
+| `scripts/lab_fix_workspace.sh` | **Lab workspace recovery (no sudo, no Docker).** A `~/turtlebot3_ws` copied from another machine/user is unsalvageable in place (absolute CMake-cache paths + foreign-owned files). This rebuilds it from the fail-safe zip in `~/Downloads`: extracts only `src/`, quarantines the broken dirs by rename (local experiments kept), fixes permissions, repairs `~/.bashrc`, clean-rebuilds in a sanitized environment, verifies. Tested by `scripts/test_lab_fix_workspace.sh` (57-assertion container suite). |
+| `scripts/Dockerfile` | Fallback image build for Docker-capable machines if no turtlebot3 image exists. |
 | `docker/build.sh` / `run.sh` (+ `.ps1`) | Build/enter the dev image at home. |
 | `docker/ci.sh` | **The CI gate:** clean `colcon build` + the entire test suite, headless. |
 | `docker/sim_smoke.sh` | Headless end-to-end `sim_only` boot check: Nav2 active, AMCL localized, topics flowing with the right types. |

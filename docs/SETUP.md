@@ -63,22 +63,23 @@ nodes, stable in long sessions — "strongly recommended for 2IRR10".
 ---
 
 ## 2. LAB — the HP Z-Book (TESTING ONLY)
-**Canonical path = the Docker container** (turtlebot3 lives in the `turtlebot3_ws` image, not the bare
-host — `docs/DECISIONS.md` D1). Use the one script: `./scripts/lab_run.sh` (full `both` demo) or `./scripts/lab_run.sh --sim` (hardware-free fallback) (see
-`docs/RUN_ON_LAB_PC.md`). The native commands below are a **fallback ONLY if** the host turns out to
-have turtlebot3 natively (`ros2 pkg list | grep turtlebot3` non-empty); on the bare host that grep is
-expected empty.
+**The lab PC runs everything NATIVELY — it has NO Docker (verified on the machine, 2026-06).**
+ROS 2 Jazzy lives at `/opt/ros/jazzy` and the turtlebot3 stack is **built from source** in
+`~/turtlebot3_ws/src` (`turtlebot3`, `turtlebot3_msgs`, `DynamixelSDK`, `turtlebot3_simulations`);
+`algae_dt` builds on top in the same workspace. Use the one script: `./scripts/lab_run.sh` (full
+`both` demo) or `./scripts/lab_run.sh --sim` (hardware-free fallback) — it auto-detects the
+runtime and on the lab PC lands on native (`--native` forces). See `docs/RUN_ON_LAB_PC.md`.
 
-**First thing, every session — verify the environment (10 s, settles the old "no turtlebot3" doubt):**
+**First thing, every session — verify the workspace (10 s):**
 ```bash
+source /opt/ros/jazzy/setup.bash && source ~/turtlebot3_ws/install/setup.bash
 ros2 pkg list | grep turtlebot3        # expect turtlebot3_gazebo, _bringup, _navigation2, _teleop
 ros2 pkg list | grep nav2_simple_commander   # mission_runner's BasicNavigator import depends on it
-command -v docker && docker images | grep turtlebot3_ws   # (only matters if native TB3 is missing)
 ```
 If `nav2_simple_commander` is missing (rare), it's the one runtime dep to flag to a TA per the
 no-sudo process (RULES §A-3). Run the same two `ros2 pkg list` checks at home in the container.
-If `ros2 pkg list | grep turtlebot3` shows the packages → run **native**. If not, fall back to the
-`turtlebot3_ws` Docker image (same `docker run --net=host …` as §1). One of the two always works.
+If the turtlebot3 packages don't resolve, the workspace is broken — recover it with
+`./scripts/lab_fix_workspace.sh` (below), don't hand-patch it.
 
 Get the package onto the laptop (course "How to create Packages.pdf", **Section 3 = copy full package**):
 ```bash

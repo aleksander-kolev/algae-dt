@@ -16,8 +16,15 @@ the course material shows the **intended environment is WSL+Docker running the p
 it. The turtlebot3 build log we'd once seen was the **robot's Raspberry Pi** (`turtlebot@ubuntu`), a
 different machine — not the lab PC. So turtlebot3 IS available via the intended path; the old
 "absent" finding was true only for the bare native account, which was never the target.
-**Status:** settled. One thing to confirm in the lab next session: `ros2 pkg list | grep turtlebot3`
-(native) and/or `docker images | grep turtlebot3_ws`.
+**Status:** settled — and the open check is now CONFIRMED (lab session, 2026-06): the lab PC has
+**NO Docker**; the turtlebot3 stack is present natively, **built from source in
+`~/turtlebot3_ws/src`** (`turtlebot3`, `turtlebot3_msgs`, `DynamixelSDK`, `turtlebot3_simulations`).
+So the demo path on the lab PC is **native** (`scripts/lab_run.sh` auto-detects; `--native` forces),
+and the stock-stack decision holds exactly as made — the stack comes from the workspace sources
+instead of an image. Corollary learned the hard way: that from-source workspace is the machine's
+single point of failure — copied from another PC it breaks (absolute CMake paths + foreign-owned
+files, unfixable without sudo); `scripts/lab_fix_workspace.sh` rebuilds it from the fail-safe zip
+in `~/Downloads` (no sudo).
 
 ## D2 — Reuse the stock turtlebot3 packages; our code is a thin DT layer only
 **Decision:** use `turtlebot3_gazebo` / `turtlebot3_navigation2` / `turtlebot3_bringup` /

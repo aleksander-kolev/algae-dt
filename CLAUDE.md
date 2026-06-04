@@ -55,6 +55,12 @@ Authoritative docs: design + rubric `docs/RUBRIC_MAP.md`; plan `docs/PLAN.md`; e
 - Robot bringup on the Pi: `export TURTLEBOT3_MODEL=burger; export LDS_MODEL=LDS-02;
   ros2 launch turtlebot3_bringup robot.launch.py`. Shutdown **`sudo shutdown now` on the robot Pi
   BEFORE flipping the power switch** (the robot Pi grants this sudo; the laptop does NOT).
+- **Lab PC runtime (VERIFIED 2026-06): NO Docker — fully native.** ROS Jazzy at `/opt/ros/jazzy`,
+  the turtlebot3 stack **built from source in `~/turtlebot3_ws/src`** (`turtlebot3`,
+  `turtlebot3_msgs`, `DynamixelSDK`, `turtlebot3_simulations`). Demo = `./scripts/lab_run.sh`
+  (auto-detects → native there; `--native` forces). Workspace broken / copied from another PC
+  (foreign CMake paths, EACCES on install files) → `./scripts/lab_fix_workspace.sh` (no sudo;
+  rebuilds from the fail-safe zip in `~/Downloads`).
 - **Jazzy `/cmd_vel` is `geometry_msgs/TwistStamped`** by default (real bringup AND turtlebot3_gazebo).
 
 ## 4. Architecture — `algae_dt` custom package (thin DT layer on the stock stack)
