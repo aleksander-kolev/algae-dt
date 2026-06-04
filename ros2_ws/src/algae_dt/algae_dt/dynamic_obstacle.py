@@ -14,10 +14,12 @@ from __future__ import annotations
 import functools
 import re
 import subprocess
+import time
 
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from rcl_interfaces.msg import ParameterDescriptor
+from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
 
 from algae_dt.lib import trajectory
@@ -35,7 +37,9 @@ class DynamicObstacle(Node):
         self.cx = gp('center_x', 0.6)
         self.cy = gp('center_y', 0.0)
         self.z = gp('center_z', 0.25)
-        self.amplitude = gp('amplitude', 0.6)
+        # magnitude: -A and +A are the same sweep, and a raw negative here inverted the
+        # `clamped < amplitude` keep-out guard below (the clamp was silently skipped).
+        self.amplitude = abs(gp('amplitude', 0.6))
         self.period = gp('period', 12.0)
         # `axis` tolerates ros2's YAML coercion of a bare `-p axis:=y` to bool True (the "Norway
         # problem"): declare it dynamically-typed and normalize to 'x'/'y' so the demo never crashes.
@@ -46,17 +50,21 @@ class DynamicObstacle(Node):
         self.spawn_timeout_ms = int(gp('spawn_timeout_ms', 5000))   # create can be slow on a throttled sim
         self.set_pose_timeout_ms = int(gp('set_pose_timeout_ms', 500))
         self.keepout_radius_m = gp('keepout_radius_m', 0.30)   # protected radius around the robot spawn
+        self.box_half_extent_m = gp('box_half_extent_m', 0.15)  # obstacle_box.sdf is 0.3 m -> half = 0.15
 
         # The box is <static>true</static> and moved by TELEPORT (set_pose) — Gazebo applies no
         # collision response, so a sweep through the robot spawn (0,0) would shove the box INTO the
         # robot. Clamp the amplitude to keep the swept segment out of the keep-out circle; refuse
-        # outright when even the centre violates it.
+        # outright when even the centre violates it. The box is NOT a point: inflate the keep-out by
+        # the box half-extent so its FACE (not just its centre) stays clear of the protected radius.
+        effective_keepout = self.keepout_radius_m + self.box_half_extent_m
         clamped = trajectory.clamp_amplitude_for_keepout(
-            0.0, 0.0, self.cx, self.cy, self.amplitude, self.axis, self.keepout_radius_m)
+            0.0, 0.0, self.cx, self.cy, self.amplitude, self.axis, effective_keepout)
         if clamped is None:
             self.get_logger().error(
-                f"obstacle centre ({self.cx},{self.cy}) is inside the {self.keepout_radius_m} m "
-                "keep-out around the robot spawn (0,0) — refusing to spawn/move the box")
+                f"obstacle centre ({self.cx},{self.cy}) is inside the {effective_keepout:.2f} m "
+                "keep-out (radius + box half-extent) around the robot spawn (0,0) — refusing to "
+                "spawn/move the box")
             self.do_spawn = False
             self.amplitude = 0.0
             self._refused = True
@@ -68,10 +76,15 @@ class DynamicObstacle(Node):
                     f">= {self.keepout_radius_m} m clearance from the robot spawn (0,0)")
                 self.amplitude = clamped
 
-        self._t0 = self._now()
+        # WALL-clock timebase + timer. The node clock is SIM time in sim_only, and rclpy ROS timers
+        # fire on the node clock — so with use_sim_time the _tick timer (and the spawn-retry it
+        # drives) is gated on /clock, which a slow/paused/absent sim never publishes. That defeats
+        # the very "slow/absent sim" resilience the retry promises. Drive both from a STEADY clock.
+        self._steady_clock = Clock(clock_type=ClockType.STEADY_TIME)
+        self._t0 = time.monotonic()
         self._spawned = False
         self._set_pose_fails = 0          # consecutive set_pose failures after a confirmed spawn
-        self.create_timer(1.0 / self.rate_hz, self._tick)
+        self.create_timer(1.0 / self.rate_hz, self._tick, clock=self._steady_clock)
         self.get_logger().info(
             f"dynamic_obstacle: '{self.name}' sweeping {self.axis} +/-{self.amplitude} m "
             f"about ({self.cx},{self.cy}) period {self.period}s in world '{self.world}'")
@@ -99,7 +112,7 @@ class DynamicObstacle(Node):
                 return
             self._spawned = True
             self.get_logger().info(f"obstacle '{self.name}' spawned")
-        x, y = trajectory.oscillate(self._now() - self._t0, self.cx, self.cy,
+        x, y = trajectory.oscillate(time.monotonic() - self._t0, self.cx, self.cy,
                                     self.amplitude, self.period, self.axis)
         if self._set_pose(x, y) or not self._spawned:
             self._set_pose_fails = 0

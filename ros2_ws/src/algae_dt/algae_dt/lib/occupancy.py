@@ -99,6 +99,9 @@ def reachable_goal(grid: Grid, map_info: geometry.MapInfo, x: float, y: float,
     mis-click, not a mission target."""
     if map_info.resolution <= 0.0:
         return None
+    if not (math.isfinite(x) and math.isfinite(y)):
+        return None                      # non-finite target = degenerate off-map; geometry.
+                                         # world_to_pixel would raise on floor(NaN/inf) otherwise
     col, row = geometry.world_to_pixel(x, y, map_info)
     if col < 0 or row < 0 or col >= grid.width or row >= grid.height:
         return None

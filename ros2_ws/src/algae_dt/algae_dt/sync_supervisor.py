@@ -92,13 +92,27 @@ class SyncSupervisor(Node):
         self._awaiting_motion = False
         self._real_moving = False
         self._sim_moving = False
+        # Stop-skew is captured ONLY in the window between a safety block's RISING edge and both
+        # worlds coming to rest (the "armed" window). Earlier code set _t_real_stop/_t_sim_stop on
+        # EVERY odom stop and never reset them, so a fresh block differenced the timestamps of two
+        # arbitrary, unrelated, possibly-ancient stops (e.g. a mission waypoint pause in each world
+        # seconds apart) — fabricating a huge bogus pillar-③ "synchronous stop" number in the graded
+        # CSV/alert. Now only stops that happen AFTER the block, within stop_skew_window_s, count.
+        self._stop_skew_armed = False
+        self._t_block = None
         self._t_real_stop = None
         self._t_sim_stop = None
+        self.stop_skew_window_s = gp('stop_skew_window_s', 2.0)   # both worlds must rest within this
         self._safety_blocked = False
         self._pending_stop_skew = None
         self._t_real_pose = None
         self._t_sim_pose = None
         self._t_start = self._now()
+        # Startup grace is measured on WALL time: under use_sim_time the node clock reads 0 until the
+        # first /clock arrives, so _now()-_t_start jumped from ~0 to sim-epoch the instant /clock
+        # appeared and collapsed the grace window -> a false "pose stream stale/absent" alert +
+        # sync_ok=False at session start in sim_only.
+        self._t_start_wall = time.monotonic()
         self._csv_rows = 0
         self._alert_last: dict[str, float] = {}   # alert key -> last publish time (edge+repeat gating)
         self._alert_active: dict[str, bool] = {}  # alert key -> condition was true last tick
@@ -183,6 +197,12 @@ class SyncSupervisor(Node):
             # is taken from the same clock, so the difference is a real one-clock latency.
             self._t_cmd = self._now()
             self._awaiting_motion = True
+        elif not moving and self._awaiting_motion:
+            # The commanded motion ended before the robot ever moved (the safety gate, E-STOP, or a
+            # mission abort zeroed the command). Discard the pending measurement so it cannot pin a
+            # giant stale command->motion latency on the NEXT, unrelated motion onset.
+            self._awaiting_motion = False
+            self._t_cmd = None
         self._cmd_moving = moving
 
     def _on_active_odom(self, msg: Odometry) -> None:
@@ -193,17 +213,19 @@ class SyncSupervisor(Node):
             self._latency_fresh = True
             self.pub_latency.publish(Float64(data=self._latency_ms))
             self._awaiting_motion = False
-        if self._real_moving and not moving:
-            self._t_real_stop = now
+        if self._stop_skew_armed and self._real_moving and not moving and self._t_real_stop is None:
+            self._t_real_stop = now              # the REAL world came to rest AFTER this block
+            self._maybe_finalize_stop_skew()
         self._real_moving = moving
 
     def _on_sim_odom(self, msg: Odometry) -> None:
         moving = self._odom_moving(msg)
-        if self._sim_moving and not moving:
+        if self._stop_skew_armed and self._sim_moving and not moving and self._t_sim_stop is None:
             # SAME observer clock as _t_real_stop. The header stamp here is gz SIM time while the
             # real odom's stamp is the Pi's wall clock — differencing those two domains made every
             # both-mode stop_skew astronomically large (the pillar-③ 'synchronous stop' number).
-            self._t_sim_stop = self._now()
+            self._t_sim_stop = self._now()       # the SIM world came to rest AFTER this block
+            self._maybe_finalize_stop_skew()
         self._sim_moving = moving
 
     def _odom_moving(self, msg: Odometry) -> bool:
@@ -212,11 +234,32 @@ class SyncSupervisor(Node):
 
     def _on_safety(self, msg: Bool) -> None:
         blocked = bool(msg.data)
-        # On a fresh block in `both`, capture the real-vs-sim stop-time skew once both have stopped.
-        if blocked and not self._safety_blocked and self._both:
-            if self._t_real_stop is not None and self._t_sim_stop is not None:
-                self._pending_stop_skew = (self._t_real_stop - self._t_sim_stop) * 1000.0
+        if self._both and blocked and not self._safety_blocked:
+            # ARM a fresh stop-skew measurement for THIS block. A world already at rest when the
+            # block fires contributes the block time as its stop (it stopped at-or-before the block);
+            # a still-moving world's stop is captured by its odom callback. Only stops inside this
+            # armed window are ever differenced -> the skew always belongs to the block that caused it.
+            self._t_block = self._now()
+            self._stop_skew_armed = True
+            self._t_real_stop = self._t_block if not self._real_moving else None
+            self._t_sim_stop = self._t_block if not self._sim_moving else None
+            self._maybe_finalize_stop_skew()
+        elif self._both and not blocked and self._safety_blocked and self._stop_skew_armed:
+            # The block cleared before both worlds came to rest: there was no synchronous-stop event
+            # to measure, so disarm rather than fabricate a number from a partial/old pair.
+            self._disarm_stop_skew()
         self._safety_blocked = blocked
+
+    def _maybe_finalize_stop_skew(self) -> None:
+        """Once both post-block stop times are known, latch the skew (consumed one-shot by the tick)."""
+        if (self._stop_skew_armed and self._t_real_stop is not None
+                and self._t_sim_stop is not None):
+            self._pending_stop_skew = (self._t_real_stop - self._t_sim_stop) * 1000.0
+            self._stop_skew_armed = False
+
+    def _disarm_stop_skew(self) -> None:
+        self._stop_skew_armed = False
+        self._t_real_stop = self._t_sim_stop = None
 
     def _stream_ok(self) -> bool:
         """True iff every REQUIRED pose stream has reported within pose_timeout_s (fail-loud, F5).
@@ -244,6 +287,10 @@ class SyncSupervisor(Node):
         return skew
 
     def _on_sync_timer(self) -> None:
+        # Abandon an armed stop-skew whose worlds never both came to rest within the window (a
+        # transient block, or one world that never stopped) — don't fabricate a partial skew.
+        if self._stop_skew_armed and (self._now() - self._t_block) > self.stop_skew_window_s:
+            self._disarm_stop_skew()
         if not self._stream_ok():
             skew = self._consume_stop_skew()      # don't lose a captured safety-event skew
             if skew is not None:
@@ -251,7 +298,7 @@ class SyncSupervisor(Node):
                                        "(alerted; not logged to CSV — no sync row without poses)")
             # Startup: stay quiet until the timeout elapses. After that a missing/stale REQUIRED
             # stream IS a desync -> fail loud (sync_ok False + alert), never silently skip (F5).
-            if self._now() - self._t_start > self.pose_timeout_s:
+            if time.monotonic() - self._t_start_wall > self.pose_timeout_s:
                 self.pub_ok.publish(Bool(data=False))
                 self._alert('stream', True,
                             "SYNC pose stream stale/absent (a world is not reporting)")

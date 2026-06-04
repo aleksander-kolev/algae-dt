@@ -49,8 +49,19 @@ def _read_header(data: bytes) -> tuple[int, int, int, int]:
         if pos == start:
             raise ValueError("truncated PGM header")
         vals.append(int(data[start:pos]))
-    # Exactly one whitespace char separates maxval from the body.
-    return vals[0], vals[1], vals[2], pos + 1
+    # The body starts after the maxval token's single whitespace terminator (PNM spec) — but do
+    # NOT hard-code pos+1: that dropped/shifted every pixel when the maxval line ended in CRLF
+    # (body began on the leftover '\n') or when a '#' comment abutted maxval (GIMP/hand-edited
+    # maps). Tolerate both: skip an abutting comment, then consume CRLF as one logical separator.
+    p = pos
+    if p < n and data[p:p + 1] == b'#':
+        while p < n and data[p:p + 1] != b'\n':
+            p += 1
+    if data[p:p + 2] == b'\r\n':
+        p += 2
+    elif p < n and data[p:p + 1] in _WS:
+        p += 1
+    return vals[0], vals[1], vals[2], p
 
 
 def parse(data: bytes) -> Pgm:

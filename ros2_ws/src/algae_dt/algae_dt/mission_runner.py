@@ -79,7 +79,18 @@ class MissionRunner(Node):
         self._pub_lock = threading.Lock()
         self._field = B.BloomField()
         self._robot_xy = (0.0, 0.0)            # MAP frame (matches the map-frame blooms)
-        self._robot_yaw = 0.0                  # odom yaw (rad), for the closed-loop spray spin count
+        self._robot_yaw = 0.0                  # latest odom yaw (rad)
+        self._pose_seen = False                # have we received a real map pose yet? (real_only/both)
+        # The spray's closed-loop yaw is accumulated ON ODOM ARRIVAL (not sampled in the worker loop).
+        # Over the lossy AP2IRR10 link RELIABLE odom is retransmitted IN ORDER, so consecutive messages
+        # are always < pi apart and never wrap-alias; a worker-loop sample taken across a delivery gap
+        # could see a > pi jump aliased to < pi and UNDER-count the spin (false-skip). The stall
+        # watchdog is gated on odom ARRIVAL age, so a Wi-Fi gap (stale odom) no longer false-aborts a
+        # healthy, actively-spinning robot.
+        self._odom_t = time.monotonic()
+        self._spray_active = False
+        self._spray_turned = 0.0
+        self._spray_last_yaw = None
         self._estop = False
         self._running = False
         self._worker: threading.Thread | None = None
@@ -167,18 +178,35 @@ class MissionRunner(Node):
             self._set_state('idle')
 
     def _on_estop(self, msg: Bool) -> None:
+        was = self._estop
         self._estop = bool(msg.data)
         if self._estop:
             self._running = False
+            if not was:
+                # Publish a TERMINAL state on the rising edge: the worker breaks out of the loop
+                # without publishing one on the E-STOP path, so /dt/mission_state would otherwise
+                # stay 'navigating:X' / 'spraying:X' forever and the GUI banner would lie that the
+                # mission is still running.
+                self._set_state('estopped')
 
     def _on_odom(self, msg: Odometry) -> None:
         # Odom is used ONLY for the spray's closed-loop yaw accumulation (relative angle, any frame).
         p = msg.pose.pose
-        self._robot_yaw = geometry.yaw_from_quaternion(p.orientation.z, p.orientation.w)
+        yaw = geometry.yaw_from_quaternion(p.orientation.z, p.orientation.w)
+        if not math.isfinite(yaw):
+            return                              # reject a garbage odom sample; never poison the count
+        self._odom_t = time.monotonic()
+        self._robot_yaw = yaw
+        if self._spray_active and self._spray_last_yaw is not None:
+            d = abs(geometry.angle_diff(yaw, self._spray_last_yaw))
+            if d <= math.pi * 0.9:              # a near-pi single-message jump = a delivery gap, not
+                self._spray_turned += d         # real rotation -> skip (fail-safe under-count, no alias)
+        self._spray_last_yaw = yaw
 
     def _on_map_pose(self, msg: PoseStamped) -> None:
         p = msg.pose.position
         self._robot_xy = (p.x, p.y)
+        self._pose_seen = True
 
     # ----------------------------------------------------------- mission loop
     def _start(self) -> None:
@@ -204,6 +232,19 @@ class MissionRunner(Node):
         # nothing". Nav2 is autostarted by the launch and AMCL is seeded (set_initial_pose in sim_only
         # / operator 2D-Pose-Estimate on the robot); goToPose() waits for the action server itself.
         active_id = None                       # in-flight bloom, reverted to PENDING on a crash
+        # real_only/both: the map pose comes from AMCL (/dt/real_pose) only after the operator seeds
+        # it; picking the first target from the default (0,0) before it arrives navigates to the wrong
+        # bloom (the arena origin is far from (0,0)). Wait briefly for the first pose (sim_only's
+        # /dt/sim_pose arrives immediately, so this is skipped there).
+        if self.mode != 'sim_only' and not self._pose_seen:
+            deadline = time.monotonic() + 2.0
+            while (self._running and not self._estop and not self._pose_seen
+                   and time.monotonic() < deadline):
+                time.sleep(0.05)
+            if not self._pose_seen:
+                self.get_logger().warn(
+                    "no /dt/real_pose yet — first target picked from a default pose; re-seed AMCL "
+                    "(RViz 2D Pose Estimate) if the first goal looks wrong")
         try:
             while self._running and not self._estop:
                 with self._lock:
@@ -332,28 +373,37 @@ class MissionRunner(Node):
         target = self.spray_revolutions * 2.0 * math.pi
         cap = time.monotonic() + (target / omega) * self.spray_time_margin
         period = 1.0 / self.cmd_rate_hz
-        turned = 0.0
-        last = self._robot_yaw
+        # Arm odom-driven accumulation (see _on_odom). The first odom after this sets the baseline,
+        # so there is no bogus initial delta.
+        self._spray_turned = 0.0
+        self._spray_last_yaw = None
+        self._spray_active = True
         last_progress = time.monotonic()
-        while turned < target and time.monotonic() < cap:
-            if self._estop or not self._running:
-                self._publish_spin(0.0)
-                return False
-            if time.monotonic() - last_progress > self.spray_stall_timeout_s:
-                break                                       # odom frozen -> watchdog abort
-            self._publish_spin(omega)
-            time.sleep(period)
-            y = self._robot_yaw
-            d = abs(geometry.angle_diff(y, last))   # wrap-safe |delta yaw| since last sample
-            if d > 1e-6:
-                last_progress = time.monotonic()
-            turned += d
-            last = y
-        self._publish_spin(0.0)
-        if turned < target:    # a guard fired before the count completed -> odom stalled, NOT sprayed
+        last_turned = 0.0
+        try:
+            while self._spray_turned < target and time.monotonic() < cap:
+                if self._estop or not self._running:
+                    return False
+                self._publish_spin(omega)
+                time.sleep(period)
+                turned = self._spray_turned                 # accumulated in _on_odom (wrap-safe)
+                if turned > last_turned + 1e-6:
+                    last_progress = time.monotonic()
+                    last_turned = turned
+                # STALL WATCHDOG: abort only when odom is FRESH but the robot is NOT turning (a real
+                # wedge). A stale-odom Wi-Fi gap must NOT abort a healthy spin — the absolute cap still
+                # bounds a genuinely dead robot, and when odom resumes the in-order burst restores the
+                # true (un-aliased) count.
+                odom_fresh = (time.monotonic() - self._odom_t) < self.spray_stall_timeout_s
+                if odom_fresh and (time.monotonic() - last_progress) > self.spray_stall_timeout_s:
+                    break
+        finally:
+            self._spray_active = False
+            self._publish_spin(0.0)
+        if self._spray_turned < target:   # a guard fired before the count completed -> NOT sprayed
             self.get_logger().warn(
-                f"spray watchdog hit at {turned / (2.0 * math.pi):.2f}/{self.spray_revolutions} "
-                f"revs (odom stalled?) -> bloom NOT marked treated")
+                f"spray watchdog hit at {self._spray_turned / (2.0 * math.pi):.2f}/"
+                f"{self.spray_revolutions} revs (odom stalled?) -> bloom NOT marked treated")
             return False
         return True
 

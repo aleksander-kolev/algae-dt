@@ -251,7 +251,7 @@ run_fix "$H3" "$T/t3e.log" --domain banana; rc=$?
 section "T4: src/ at archive root, and src CONTENTS zipped without src/"
 H4="$T/home4"; rm -rf "$H4"; mkdir -p "$H4/Downloads"
 FX4="$T/fx4"; rm -rf "$FX4"; mkdir -p "$FX4/wsroot"
-make_pkg_py "$FX4/wsroot/src/just_one_pkg" just_one_pkg
+make_pkg_py "$FX4/wsroot/src/turtlebot3_msgs" turtlebot3_msgs
 ( cd "$FX4/wsroot" && python3 -c "
 import os, zipfile
 with zipfile.ZipFile('$H4/Downloads/root_is_ws.zip','w') as z:
@@ -260,18 +260,18 @@ with zipfile.ZipFile('$H4/Downloads/root_is_ws.zip','w') as z:
 " )
 chown -R tester:tester "$H4"
 if run_fix "$H4" "$T/t4a.log" --no-bashrc; then ok "T4a src/ at archive root: exit 0"; else bad "T4a src/ at archive root: exit 0"; sed 's/^/    | /' "$T/t4a.log" | tail -20; fi
-check "T4a package extracted + built"                  test -d "$H4/turtlebot3_ws/install/just_one_pkg"
+check "T4a package extracted + built"                  test -d "$H4/turtlebot3_ws/install/turtlebot3_msgs"
 
 H4b="$T/home4b"; rm -rf "$H4b"; mkdir -p "$H4b/Downloads"
 ( cd "$FX4/wsroot/src" && python3 -c "
 import os, zipfile
 with zipfile.ZipFile('$H4b/Downloads/src_contents.zip','w') as z:
-    for r, ds, fs in os.walk('just_one_pkg'):
+    for r, ds, fs in os.walk('turtlebot3_msgs'):
         for x in ds + fs: z.write(os.path.join(r, x))
 " )
 chown -R tester:tester "$H4b"
 if run_fix "$H4b" "$T/t4b.log" --no-bashrc --no-build; then ok "T4b src CONTENTS zipped: exit 0"; else bad "T4b src CONTENTS zipped: exit 0"; sed 's/^/    | /' "$T/t4b.log" | tail -20; fi
-check "T4b package landed under ws/src"                test -f "$H4b/turtlebot3_ws/src/just_one_pkg/package.xml"
+check "T4b package landed under ws/src"                test -f "$H4b/turtlebot3_ws/src/turtlebot3_msgs/package.xml"
 
 # ============================================================================ T5: algae_dt repo refresh
 section "T5: algae_dt refreshed from a repo checkout next to the script"
@@ -298,10 +298,10 @@ check "T5b zip copy kept"                              test -f "$H5b/turtlebot3_
 # ============================================================================ T6: --from-dir salvage
 section "T6: --from-dir salvage (readable) and refusal (foreign-owned src)"
 H6="$T/home6"; rm -rf "$H6"; mkdir -p "$H6"
-SAL="$H6/old_ws_dir"; make_pkg_py "$SAL/src/salvage_pkg" salvage_pkg
+SAL="$H6/old_ws_dir"; make_pkg_py "$SAL/src/turtlebot3_msgs" turtlebot3_msgs
 chown -R tester:tester "$H6"
 if run_fix "$H6" "$T/t6a.log" --from-dir "$SAL" --no-bashrc --no-build; then ok "T6a salvage exit 0"; else bad "T6a salvage exit 0"; sed 's/^/    | /' "$T/t6a.log" | tail -20; fi
-check "T6a salvaged package present"                   test -f "$H6/turtlebot3_ws/src/salvage_pkg/package.xml"
+check "T6a salvaged package present"                   test -f "$H6/turtlebot3_ws/src/turtlebot3_msgs/package.xml"
 
 H6b="$T/home6b"; rm -rf "$H6b"; mkdir -p "$H6b"
 SAL2="$H6b/old_ws_dir"; make_pkg_py "$SAL2/src/salvage_pkg" salvage_pkg
@@ -336,6 +336,42 @@ else bad "T8 exit 0 with broken unzip"; sed 's/^/    | /' "$T/t8.log" | tail -20
 check "T8 packages extracted via python fallback"      test -f "$H8/turtlebot3_ws/src/turtlebot3_msgs/package.xml"
 check "T8 poison still skipped"                        bash -c "! find '$H8/turtlebot3_ws' -name local_setup.dsv | grep -q ."
 check "T8 mode-000 dir still recovered"                runuser -u tester -- cat "$H8/turtlebot3_ws/src/turtlebot3_msgs/locked_dir/file.txt"
+
+# ============================================================================ T9: non-tb3 archive refused
+section "T9: an archive without the turtlebot3 stack (the algae-dt repo zip) is REFUSED"
+H9="$T/home9"; rm -rf "$H9"; mkdir -p "$H9/Downloads"
+FX9="$T/fx9"; rm -rf "$FX9"; make_pkg_py "$FX9/repo_zip/ros2_ws/src/algae_dt" algae_dt
+zip_tree "$FX9" "repo_zip" "$H9/Downloads/algae-dt-main.zip"
+chmod -R u+rwX "$FX9" && rm -rf "$FX9"
+chown -R tester:tester "$H9"
+run_fix "$H9" "$T/t9.log" --no-bashrc --no-build; rc=$?
+[ "$rc" = 3 ] && ok "T9 non-tb3 archive -> exit 3" || { bad "T9 non-tb3 archive -> exit 3 (got $rc)"; sed 's/^/    | /' "$T/t9.log" | tail -20; }
+check "T9 message says not a turtlebot3_ws"            bash -c "grep -q 'NOT a turtlebot3_ws' '$T/t9.log'"
+
+# ============================================================================ T10: purge ALL quarantines
+section "T10: --purge-quarantine removes earlier-run quarantines too"
+H10="$T/home10"; make_broken_home "$H10" "ws_for_t10"
+mkdir -p "$H10/turtlebot3_ws.broken.20200101-000000/big"
+echo old > "$H10/turtlebot3_ws.broken.20200101-000000/big/file"   # tester-owned earlier-run quarantine
+chown -R tester:tester "$H10/turtlebot3_ws.broken.20200101-000000"
+run_fix "$H10" "$T/t10.log" --purge-quarantine --no-bashrc --no-build; rc=$?
+[ "$rc" = 0 ] && ok "T10 recovery + purge exit 0" || { bad "T10 recovery + purge exit 0 (got $rc)"; sed 's/^/    | /' "$T/t10.log" | tail -20; }
+check "T10 earlier-run quarantine removed (not just this run's TS)" \
+      bash -c "! test -e '$H10/turtlebot3_ws.broken.20200101-000000'"
+
+# ============================================================================ T11: anchored bashrc match
+section "T11: bashrc repair anchors quarantine-basename matches at a path boundary"
+H11="$T/home11"; rm -rf "$H11"; mkdir -p "$H11/Downloads"
+FX11="$T/fx11"; rm -rf "$FX11"; make_ws_tree "$FX11" "ws_for_t11"
+zip_tree "$FX11" "ws_for_t11" "$H11/Downloads/ws.zip"
+chmod -R u+rwX "$FX11" && rm -rf "$FX11"
+mkdir -p "$H11/turtlebot3_ws_old/src"; echo x > "$H11/turtlebot3_ws_old/src/keep"   # quarantined -> qpattern
+printf 'export PROJ=turtlebot3_ws_old_notes\nsource $HOME/turtlebot3_ws_old/install/setup.bash\n' > "$H11/.bashrc"
+chown -R tester:tester "$H11"
+run_fix "$H11" "$T/t11.log" --no-build; rc=$?
+[ "$rc" = 0 ] && ok "T11 recovery exit 0" || { bad "T11 recovery exit 0 (got $rc)"; sed 's/^/    | /' "$T/t11.log" | tail -20; }
+check "T11 unrelated PROJ line NOT disabled"          bash -c "grep -qx 'export PROJ=turtlebot3_ws_old_notes' '$H11/.bashrc'"
+check "T11 real broken source line IS disabled"       bash -c "grep -q '^# \[disabled by lab_fix_workspace.*turtlebot3_ws_old/install' '$H11/.bashrc'"
 
 # ============================================================================ summary
 printf '\n==================== RESULT: %d passed, %d failed ====================\n' "$PASS" "$FAIL"

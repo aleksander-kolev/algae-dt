@@ -17,6 +17,7 @@ this node is the ROS wiring around them.
 from __future__ import annotations
 
 import functools
+import math
 
 import rclpy
 from geometry_msgs.msg import PoseStamped, TwistStamped
@@ -83,6 +84,13 @@ class TwinMediator(Node):
         self._estop_manual = False
         self._estop_battery = False                     # LATCHED on critical; cleared only by RESUME
         self._estop_latched = False
+        # Fail-safe across a mediator RESTART: in real modes the battery latch lives only in THIS
+        # process, so a fresh __init__ would publish /dt/estop=False and silently un-latch a prior
+        # battery (auto) E-STOP while the pack is still critical (mission_runner/GUI would treat it as
+        # RESUMED with no operator action). Start HELD until the first valid /battery_state proves the
+        # pack healthy. sim_only's battery is synthetic + mediator-owned (resets with the demo), so it
+        # keeps its immediate-clear startup.
+        self._estop_startup_hold = (self.mode != 'sim_only')
         self._shadow = (0.0, 0.0, 0.0)        # commanded shadow pose (sim_only /dt/real_pose), MAP frame
         self._shadow_t: float | None = None
         self._shadow_anchored = False         # shadow is anchored to the robot's first map pose
@@ -125,8 +133,10 @@ class TwinMediator(Node):
         self.create_timer(1.0 / self.health_rate_hz, self._on_health_timer)
         self.create_timer(0.2, self._refresh_map_odom)   # AMCL map<-odom updates slowly
 
-        # latched initial state
+        # latched initial state. In real modes start E-STOP HELD (fail-safe across a mediator
+        # restart, see _estop_startup_hold); sim_only starts clear exactly as before.
         self.pub_mode.publish(String(data=self.mode))
+        self._estop_latched = self._estop_manual or self._estop_battery or self._estop_startup_hold
         self._publish_estop()
         self.get_logger().info(
             f"twin_mediator up: mode={self.mode} stop={self.stop_distance_m} m "
@@ -224,6 +234,14 @@ class TwinMediator(Node):
 
     # --------------------------------------------------------------- E-STOP
     def _update_battery_estop(self, voltage: float) -> None:
+        # Ignore invalid frames: the real OpenCR emits voltage=0.0 / NaN at bringup or on a serial
+        # hiccup; without this guard a single 0.0 frame (<= critical) would LATCH a phantom battery
+        # E-STOP on a healthy pack, requiring a manual RESUME. A real pack is never 0 V.
+        if not (math.isfinite(voltage) and voltage > 0.0):
+            return
+        # First valid healthy sample after (re)start releases the fail-safe startup hold.
+        if self._estop_startup_hold and voltage > self.battery_critical_v:
+            self._estop_startup_hold = False
         # LATCH on critical (RULES: 'latched ... RESUME clears it'). A sagging LiPo bounces above
         # and below the threshold under load; assigning `crit` each sample silently un-latched the
         # E-STOP and re-enabled motion with no operator action. Only RESUME (estop_cmd False)
@@ -234,7 +252,7 @@ class TwinMediator(Node):
         self._refresh_estop()
 
     def _refresh_estop(self) -> None:
-        latched = self._estop_manual or self._estop_battery
+        latched = self._estop_manual or self._estop_battery or self._estop_startup_hold
         if latched != self._estop_latched:
             self._estop_latched = latched
             self._publish_estop()
