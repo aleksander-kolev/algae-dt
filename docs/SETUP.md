@@ -64,7 +64,7 @@ nodes, stable in long sessions — "strongly recommended for 2IRR10".
 
 ## 2. LAB — the HP Z-Book (TESTING ONLY)
 **Canonical path = the Docker container** (turtlebot3 lives in the `turtlebot3_ws` image, not the bare
-host — `docs/DECISIONS.md` D1). Use the one script: `./scripts/lab_run.sh <mode>` (see
+host — `docs/DECISIONS.md` D1). Use the one script: `./scripts/lab_run.sh` (full `both` demo) or `./scripts/lab_run.sh --sim` (hardware-free fallback) (see
 `docs/RUN_ON_LAB_PC.md`). The native commands below are a **fallback ONLY if** the host turns out to
 have turtlebot3 natively (`ros2 pkg list | grep turtlebot3` non-empty); on the bare host that grep is
 expected empty.

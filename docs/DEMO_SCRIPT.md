@@ -22,8 +22,8 @@ rubric line it satisfies. Total ≈ 2:40. Pre-record the `sim_only` version as b
 ## 1:45–2:30 · Environmental & object interaction (→ Redlining 4)
 - **Introduce an environment change LIVE:** place a box in front of the real robot →
   **both robots stop** at 25 cm (mirrored, near-real-time); show `stop_skew_ms` is small.
-- Remove it → motion resumes; then a bloom mission: navigate around a dynamic obstacle → spray (spin
-  5 s) → bloom turns green. Sim mirrors the whole interaction.
+- Remove it → motion resumes; then a bloom mission: navigate around a dynamic obstacle → spray
+  (3 full spins) → bloom turns green. Sim mirrors the whole interaction.
 
 ## 2:30–2:40 · Close
 - "Bidirectional, synchronized, environment-driven — all mirrored across the twin." End.

@@ -12,6 +12,7 @@ Headless: QT_QPA_PLATFORM=offscreen. The window drives rclpy via a QTimer spin_o
 """
 from __future__ import annotations
 
+import math
 import os
 
 import rclpy
@@ -49,6 +50,8 @@ class GuiBridge(Node):
         self.battery_low_v = gp('battery_low_v', 11.0)
         self.battery_critical_v = gp('battery_critical_v', 10.5)
         self.bloom_radius = gp('bloom_radius_m', 0.15)
+        self.range_min = gp('scan_range_min_m', 0.12)
+        self.range_max = gp('scan_range_max_m', 3.5)
 
         # latest state for the canvas/banners
         self.real_pose = None
@@ -71,22 +74,36 @@ class GuiBridge(Node):
         self.pub_cmd = self.create_publisher(String, '/dt/mission_cmd', 10)
         self.pub_estop = self.create_publisher(Bool, '/dt/estop_cmd', _latched())
 
-        self.create_subscription(PoseStamped, '/dt/real_pose', lambda m: setattr(self, 'real_pose', _xyyaw(m)), 10)
-        self.create_subscription(PoseStamped, '/dt/sim_pose', lambda m: setattr(self, 'sim_pose', _xyyaw(m)), 10)
-        self.create_subscription(LaserScan, '/dt/scan_active', lambda m: setattr(self, 'scan', m), qos_profile_sensor_data)
-        self.create_subscription(MarkerArray, '/dt/markers', lambda m: setattr(self, 'markers', m), _latched(10))
-        self.create_subscription(String, '/dt/mode', lambda m: setattr(self, 'mode', m.data), _latched())
-        self.create_subscription(Bool, '/dt/sync_ok', lambda m: setattr(self, 'sync_ok', m.data), _latched())
-        self.create_subscription(Vector3, '/dt/sync_error', lambda m: setattr(self, 'sync_err', (m.x, m.y, m.z)), 10)
-        self.create_subscription(Float64, '/dt/latency_ms', lambda m: setattr(self, 'latency_ms', m.data), 10)
-        self.create_subscription(BatteryState, '/dt/health', lambda m: setattr(self, 'battery_v', m.voltage), 10)
-        self.create_subscription(Bool, '/dt/safety', lambda m: setattr(self, 'safety_blocked', m.data), _latched())
-        self.create_subscription(String, '/dt/mission_state', lambda m: setattr(self, 'mission_state', m.data), _latched(10))
-        self.create_subscription(Bool, '/dt/estop', lambda m: setattr(self, 'estop', m.data), _latched())
+        self.create_subscription(PoseStamped, '/dt/real_pose', self._on_real_pose, 10)
+        self.create_subscription(PoseStamped, '/dt/sim_pose', self._on_sim_pose, 10)
+        self.create_subscription(LaserScan, '/dt/scan_active', self._on_scan, qos_profile_sensor_data)
+        self.create_subscription(MarkerArray, '/dt/markers', self._on_markers, _latched(10))
+        self.create_subscription(String, '/dt/mode', self._on_mode, _latched())
+        self.create_subscription(Bool, '/dt/sync_ok', self._on_sync_ok, _latched())
+        self.create_subscription(Vector3, '/dt/sync_error', self._on_sync_err, 10)
+        self.create_subscription(Float64, '/dt/latency_ms', self._on_latency, 10)
+        self.create_subscription(BatteryState, '/dt/health', self._on_health, 10)
+        self.create_subscription(Bool, '/dt/safety', self._on_safety, _latched())
+        self.create_subscription(String, '/dt/mission_state', self._on_mission_state, _latched(10))
+        self.create_subscription(Bool, '/dt/estop', self._on_estop, _latched())
 
     def _declare(self, name, default):
         self.declare_parameter(name, default)
         return self.get_parameter(name).value
+
+    # ---- inbound /dt/* state (named handlers so the mapping is unit-testable, F17) ----
+    def _on_real_pose(self, m): self.real_pose = _xyyaw(m)
+    def _on_sim_pose(self, m): self.sim_pose = _xyyaw(m)
+    def _on_scan(self, m): self.scan = m
+    def _on_markers(self, m): self.markers = m
+    def _on_mode(self, m): self.mode = m.data
+    def _on_sync_ok(self, m): self.sync_ok = m.data
+    def _on_sync_err(self, m): self.sync_err = (m.x, m.y, m.z)
+    def _on_latency(self, m): self.latency_ms = m.data
+    def _on_health(self, m): self.battery_v = m.voltage
+    def _on_safety(self, m): self.safety_blocked = m.data
+    def _on_mission_state(self, m): self.mission_state = m.data
+    def _on_estop(self, m): self.estop = m.data
 
     # ---- operator actions ----
     def place_bloom(self, x: float, y: float) -> None:
@@ -202,11 +219,11 @@ def _make_window(bridge: GuiBridge):
             scan, pose = self.bridge.scan, self._active_pose()
             if scan is None or pose is None:
                 return
-            import math
             px, py, pyaw = pose
             qp.setPen(QtGui.QPen(QtGui.QColor(255, 80, 80, 200), 2))
             for rx, ry in hud.scan_points(list(scan.ranges), scan.angle_min, scan.angle_increment,
-                                          scan.range_min or 0.12, scan.range_max or 3.5):
+                                          scan.range_min or self.bridge.range_min,
+                                          scan.range_max or self.bridge.range_max):
                 wx = px + rx * math.cos(pyaw) - ry * math.sin(pyaw)
                 wy = py + rx * math.sin(pyaw) + ry * math.cos(pyaw)
                 qp.drawPoint(self.world_to_screen(wx, wy))
@@ -231,7 +248,6 @@ def _make_window(bridge: GuiBridge):
         def _draw_pose(self, qp, pose, color):
             if pose is None:
                 return
-            import math
             x, y, yaw = pose
             c = self.world_to_screen(x, y)
             # Heading tip computed in WORLD metres then mapped through world_to_screen, so the
@@ -287,11 +303,11 @@ def _make_window(bridge: GuiBridge):
             self._set('sync', f"SYNC: {hud.sync_text(b.sync_ok)}  "
                       f"dxy={b.sync_err[0]:.2f} dyaw={b.sync_err[1]:.2f}",
                       'green' if b.sync_ok else 'red')
-            lat = '—' if b.latency_ms != b.latency_ms else f"{b.latency_ms:.0f} ms"
+            lat = '—' if math.isnan(b.latency_ms) else f"{b.latency_ms:.0f} ms"
             self._set('latency', f"LATENCY: {lat}", 'green')
-            bcol = 'green' if b.battery_v != b.battery_v else hud.battery_color(
+            bcol = 'green' if math.isnan(b.battery_v) else hud.battery_color(
                 b.battery_v, b.battery_low_v, b.battery_critical_v)
-            bv = '—' if b.battery_v != b.battery_v else f"{b.battery_v:.2f} V"
+            bv = '—' if math.isnan(b.battery_v) else f"{b.battery_v:.2f} V"
             self._set('battery', f"BATTERY: {bv}", bcol)
             self._set('safety', f"SAFETY: {hud.safety_text(b.safety_blocked)}",
                       'red' if b.safety_blocked else 'green')

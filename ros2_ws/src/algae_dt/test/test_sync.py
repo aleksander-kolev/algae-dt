@@ -68,13 +68,6 @@ def test_compute_builds_syncerror():
     assert math.isclose(err.dxy, 0.5) and math.isclose(err.sensor, 0.1, abs_tol=1e-9)
 
 
-def test_classify_ok_and_warn():
-    ok = S.SyncError(0.0, 0.0, 0.0)
-    bad = S.SyncError(1.0, 0.0, 0.0)
-    assert S.classify(ok, TOL_XY, TOL_YAW, TOL_SENSOR) == 'ok'
-    assert S.classify(bad, TOL_XY, TOL_YAW, TOL_SENSOR) == 'warn'
-
-
 # ----------------------- commanded shadow-pose integrator ------------------
 
 def test_integrate_unicycle_straight_line():

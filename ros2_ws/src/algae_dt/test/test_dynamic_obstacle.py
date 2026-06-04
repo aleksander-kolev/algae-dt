@@ -23,3 +23,87 @@ def test_constructs_without_sim():
         node.destroy_node()
     finally:
         rclpy.shutdown()
+
+
+def test_spawn_retries_until_confirmed_then_moves():
+    """A slow/failed gz create must NOT make the node give up: it used to set _spawned unconditionally
+    after one unchecked call, then teleport a model that never spawned. It must RETRY the create until
+    the service confirms (data:true) and only THEN start moving the box."""
+    rclpy.init()
+    try:
+        node = DynamicObstacle(parameter_overrides=[
+            Parameter('spawn', Parameter.Type.BOOL, True),
+            Parameter('obstacle_name', Parameter.Type.STRING, 'algae_obstacle'),
+        ])
+        calls = []
+        seq = iter([False, False, True])          # create fails twice (slow sim), then succeeds
+        def fake_gz(service, reqtype, req, timeout_ms=300):
+            calls.append(service)
+            return next(seq) if service.endswith('/create') else True
+        node._gz = fake_gz
+        created = lambda: sum(c.endswith('/create') for c in calls)
+        moved = lambda: sum(c.endswith('/set_pose') for c in calls)
+
+        node._tick(); assert not node._spawned and moved() == 0, "failed create -> not spawned, no move"
+        node._tick(); assert not node._spawned and moved() == 0, "still retrying, never moves a ghost"
+        node._tick(); assert node._spawned and created() == 3, "retries create until confirmed"
+        assert moved() >= 1, "only moves once the obstacle actually exists"
+        node.destroy_node()
+    finally:
+        rclpy.shutdown()
+
+
+def test_axis_tolerates_yaml_bool_coercion():
+    """`ros2 run … -p axis:=y` YAML-coerces bare `y` to bool True (the "Norway problem"); the node
+    must accept it (dynamic typing) and normalize to 'y', not crash with InvalidParameterTypeException."""
+    rclpy.init()
+    try:
+        node = DynamicObstacle(parameter_overrides=[
+            Parameter('spawn', Parameter.Type.BOOL, False),
+            Parameter('axis', Parameter.Type.BOOL, True),     # what an unquoted `axis:=y` becomes
+        ])
+        assert node.axis == 'y'
+        node.destroy_node()
+    finally:
+        rclpy.shutdown()
+
+
+def test_rejects_unsafe_entity_name():
+    """An entity name/world that would break the gz protobuf --req text is rejected at construction
+    (validate at the boundary, fail fast) instead of producing a malformed request (F23)."""
+    rclpy.init()
+    try:
+        with pytest.raises(ValueError):
+            DynamicObstacle(parameter_overrides=[
+                Parameter('spawn', Parameter.Type.BOOL, False),
+                Parameter('obstacle_name', Parameter.Type.STRING, 'evil" name'),
+            ])
+    finally:
+        rclpy.shutdown()
+
+
+def test_set_pose_failure_rearms_spawn():
+    """A confirmed-spawned obstacle whose set_pose then keeps failing (e.g. a world reset removed the
+    entity) must NOT freeze silently: after _SET_POSE_REFRESH_AFTER consecutive failures the node
+    re-arms the spawn and re-creates the box rather than teleporting a model that no longer exists."""
+    rclpy.init()
+    try:
+        node = DynamicObstacle(parameter_overrides=[
+            Parameter('spawn', Parameter.Type.BOOL, True),
+            Parameter('obstacle_name', Parameter.Type.STRING, 'algae_obstacle'),
+        ])
+        creates = []
+        def fake_gz(service, reqtype, req, timeout_ms=300):
+            if service.endswith('/create'):
+                creates.append(service)
+                return True            # create always confirms
+            return False               # set_pose always fails (entity keeps disappearing)
+        node._gz = fake_gz
+        # A confirmed spawn, then a run of failing set_pose calls, must force a re-spawn (2nd create).
+        for _ in range(node._SET_POSE_REFRESH_AFTER + 3):
+            node._tick()
+        assert len(creates) >= 2, \
+            "repeated set_pose failures must re-arm the spawn and re-create the obstacle, not freeze"
+        node.destroy_node()
+    finally:
+        rclpy.shutdown()

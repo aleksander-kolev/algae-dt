@@ -55,8 +55,8 @@ Confirmed before implementation:
 - **`turtlebot3_navigation2 navigation2.launch.py`** accepts `map`, `use_sim_time`, `params_file` —
   our launch/plan use exactly these.
 - Nav2 has a built-in **`spin(spin_dist, time_allowance)`** behavior; we still spray via a direct
-  timed publish to `/dt/cmd_vel_raw` (gives us the 5 s duration + abort + fan-out-to-both control),
-  but `spin()` is a viable alternative if we want Nav2 to own the rotation.
+  timed publish to `/dt/cmd_vel_raw` (gives us the exact N-revolution spin + abort + fan-out-to-both
+  control), but `spin()` is a viable alternative if we want Nav2 to own the rotation.
 
 ## Lessons & gotchas (APPEND as you learn)
 - **`tf2_echo` lies under sim time.** The CLI uses wall clock; verify TF via `ros2 topic echo /tf |
@@ -109,13 +109,45 @@ Confirmed before implementation:
   `gz sim -s --headless-rendering` renders the LiDAR via **software rasterization (swrast)** when no
   GPU is exposed to Docker → `/scan` runs ~2 Hz instead of 5 Hz. Nav2's `collision_monitor` then
   rejects the stale scans ("invalid source / impossible to transform to base frame") and stop-and-go
-  throttles the robot: in `docker/mission_smoke.py` the robot navigates (moves ~0.26 m via the full
+  throttles the robot: in `docker/mission_probe.py` (run by `docker/mission_smoke.sh`) the robot navigates (moves ~0.26 m via the full
   mission→Nav2→bus→mediator→`/cmd_vel`→gz chain — integration PROVEN) but rarely *arrives*. The fix
   is GPU-rate LiDAR: run the full navigate-and-spray demo on the **lab laptop / a GPU host** (5 Hz
   scan → Nav2 completes normally). Mission *completion* logic (arrive→spray→treated / fail→skipped /
   stop→pending) is proven hardware-free by the fake-navigator unit tests (`test_mission_runner.py`).
   `docker/sim_smoke.sh` (topic/type/flow check) is the headless acceptance gate; `mission_smoke.sh`
   is the GPU-host end-to-end check.
+- **Spray is CLOSED-LOOP on odometry, never a timer.** A fixed-duration spin UNDER-rotates: under
+  `use_sim_time` the duration is sim-seconds, and a throttled real-time-factor (or any tracking
+  slack) leaves the robot short of N full turns (we measured 1.2 of 3). `mission_runner._spray`
+  accumulates wrap-safe `|Δyaw|` from `/dt/odom_active` and spins until the robot has TRULY turned
+  `spray_revolutions*360°` — backstop `spray_time_margin ×` nominal so a stalled odom can't loop
+  forever. Verified live: measured ~3.00 full revolutions (closed-loop from `/dt/odom_active`), and
+  the map-frame view turns ≈3 revs too — the GUI/RViz view shows it.
+- **Spin near the hardware max so it's VISIBLE under a throttled sim.** The spray omega is in SIM
+  time; the wall-clock rate is `omega × real_time_factor`. On a GPU-less host RTF ≈ 0.5, so
+  `spray_omega_radps = 1.0` is only ~0.5 rad/s real — a slow drift that reads as "not rotating" even
+  though odom AND the map-frame view both turn the full N revs (the COUNT was right, the RATE wasn't).
+  Set `spray_omega_radps ≈ 2.8` with `max_angular_radps = 2.84` (Burger max) → ~1.4 rad/s real, a
+  brisk visible spin; Nav2 still plans at `max_vel_theta = 1.0` so nav is unaffected. Diagnose spin
+  problems by measuring `/odom` (physical), `/dt/sim_pose` (the map-frame VIEW) and `/joint_states`
+  (wheels) separately — they isolate robot-vs-view-vs-throttle.
+- **Throttled sim aborts nav with "Failed to make progress".** The ~3.5 Hz software-render LiDAR
+  makes the controller sluggish; the stock progress checker (move 0.5 m / 10 s) then aborts before
+  the robot settles into the goal → blooms skipped, never sprayed. Loosen it for SIM ONLY via the
+  launch `RewrittenYaml` (`movement_time_allowance: 30`, `required_movement_radius: 0.1`); our
+  `nav_goal_timeout_s` still bounds a genuinely stuck goal. real_only/both keep the stock values.
+- **Goal projection keeps Nav2 off the walls.** A bloom dropped near a wall sits in the costmap
+  inflation/lethal zone → Nav2 recovery-churns then aborts ("starts then does nothing"). The mission
+  projects each goal to the nearest obstacle-clear cell (`lib/occupancy.reachable_goal`, static map,
+  `goal_clearance_m`), capped at `center_tol_m`; un-projectable → skipped immediately (no 60 s hang).
+- **Restart-after-complete must NOT depend on `waitUntilNav2Active()`.** The reused `BasicNavigator`
+  runs it only on the 2nd+ mission (the 1st creates the navigator lazily and skips it); there it can
+  block in `_waitForInitialPose`, republish an all-zero `/initialpose` (wrecking AMCL), or throw under
+  executor contention → the mission silently does nothing. Drop the call (Nav2 is already autostarted +
+  AMCL seeded), check `goToPose()`'s return (rejected → skip, no stale SUCCEEDED reuse), and spin
+  `mission_runner` on its OWN executor so the worker's `BasicNavigator` (which spins the global
+  executor) doesn't fight `rclpy.spin`. `/dt/cmd_vel_raw` has 2 publishers (mission + collision_monitor)
+  but the latter is SILENT when idle (probe: 0 msgs), so the spray is not diluted after a goal completes.
 
 ## TA-familiar fallback: the manual multi-terminal launch
 If a combined `bringup.launch.py` misbehaves in the lab, fall back to the course's per-component

@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-# lab_run.sh — THE lab-laptop runner. It does ONE thing: bring up the FULL digital-twin demo
+# lab_run.sh — THE lab-laptop runner. By DEFAULT it brings up the FULL digital-twin demo
 # (mode:=both — real Burger leads + Gazebo sim mirror) inside the course Docker container, from a
-# fresh `git clone`. If `both` 100% cannot run on this machine, it ERRORS — it never starts a
-# half-demo. (Home / sim-only testing is a different job: use `docker/run.sh` + `docker/sim_smoke.sh`.)
+# fresh `git clone`, and ERRORS rather than start a half-demo if `both` cannot run. If the robot is
+# unavailable, pass `--sim` for the hardware-free sim_only fallback (a valid graded demo) instead.
 #
 # Usage (run from anywhere inside the cloned repo):
 #   ./scripts/lab_run.sh             # full real+sim demo (robot #36 @ 192.168.8.36, domain 36)
+#   ./scripts/lab_run.sh --sim       # hardware-free sim_only fallback demo (no robot/DDS needed)
 #   ./scripts/lab_run.sh --rebuild   # clean colcon build first
 #   TB3_IMAGE=name / ROS_DOMAIN_ID=n / ROBOT_IP=ip   # overrides if image/robot differ
 #
@@ -28,12 +29,12 @@ die() { log FATAL "$*"; exit 3; }
 
 # ---- args ----
 REBUILD=false
+MODE="both"        # default: the lab runner brings up the FULL real+sim demo
 for a in "$@"; do case "$a" in
   --rebuild) REBUILD=true ;;
-  *) die "unknown arg: $a   (this script only runs the full 'both' demo; no mode arg)" ;;
+  --sim|--fallback) MODE="sim_only" ;;
+  *) die "unknown arg: $a   (use --sim for the hardware-free fallback demo, --rebuild for a clean build)" ;;
 esac; done
-
-MODE="both"   # this is the lab runner — it ONLY does the full real+sim demo
 
 # ---- paths / config ----
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -49,7 +50,12 @@ ROBOT_IP="${ROBOT_IP:-192.168.8.36}"
 
 [ -d "$PKG_SRC" ] || die "package not found at $PKG_SRC — clone the repo and run this from inside it."
 
-echo "===================== PREFLIGHT (both-only; errors if it can't run) =====================" >&2
+# ---- record exactly which commit we are about to demo (the laptop is wiped / a USB tree can be stale) ----
+GIT_REF="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo '?')"
+GIT_DIRTY=""; git -C "$REPO" diff --quiet 2>/dev/null || GIT_DIRTY=" (DIRTY working tree — uncommitted changes)"
+log INFO "demoing algae_dt @ commit ${GIT_REF}${GIT_DIRTY}  (from $REPO)"
+
+echo "===================== PREFLIGHT (mode=$MODE; errors if it can't run) =====================" >&2
 
 # ---- HARD REQUIREMENT 1: rootful Docker (rootless can't reach the robot → can't do 'both') ----
 require_rootful_docker() {
@@ -73,17 +79,24 @@ ensure_image() {
   IMAGE="$FALLBACK_IMAGE"; log OK "built + using '$IMAGE'"
 }
 
-require_rootful_docker
+if [ "$MODE" = both ]; then
+  require_rootful_docker
+else
+  command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 \
+    || die "no usable Docker. Ask a TA to enable Docker / add you to the 'docker' group."
+  log OK "Docker usable (sim_only fallback — rootless is fine; no robot/DDS needed)"
+fi
 ensure_image
-log OK "image=$IMAGE  ROS_DOMAIN_ID=$DOMAIN  robot=$ROBOT_IP"
+log OK "image=$IMAGE  ROS_DOMAIN_ID=$DOMAIN  mode=$MODE"
 
 # ---- recreate the workspace (you deleted it) + copy the package in (course "How to create Packages" §3) ----
 log INFO "(re)creating $WS/src/algae_dt"
 mkdir -p "$WS/src"; rm -rf "$WS/src/algae_dt"; cp -r "$PKG_SRC" "$WS/src/algae_dt"
 [ "$REBUILD" = true ] && rm -rf "$WS/build" "$WS/install" "$WS/log"
 
-# ---- the robot must be up FIRST (both = real robot). Print the reminder, then require reachability. ----
-cat >&2 <<EOF
+if [ "$MODE" = both ]; then
+  # ---- the robot must be up FIRST (both = real robot). Print the reminder, then require reachability. ----
+  cat >&2 <<EOF
 
 >>> The robot must already be up (separate terminal, on the robot Pi) BEFORE this:
       ssh turtlebot@$ROBOT_IP
@@ -93,13 +106,25 @@ cat >&2 <<EOF
     In RViz set "2D Pose Estimate" on the robot's real spot before starting a mission.
 
 EOF
-# ---- HARD REQUIREMENT 3a: robot reachable on the network ----
-ping -c1 -W2 "$ROBOT_IP" >/dev/null 2>&1 \
-  || die "robot $ROBOT_IP not reachable — 'both' needs the real robot. Power it on, start the Pi bringup, join Wi-Fi AP2IRR10, then re-run."
-log OK "robot $ROBOT_IP reachable"
+  # ---- HARD REQUIREMENT 3a: robot reachable (advisory fast-fail; the authoritative gate is /scan inside) ----
+  ping -c1 -W2 "$ROBOT_IP" >/dev/null 2>&1 \
+    || die "robot $ROBOT_IP not reachable — 'both' needs the real robot. Power it on, start the Pi bringup, join Wi-Fi AP2IRR10, then re-run.
+         For the hardware-free fallback demo instead (a valid graded sim_only demo):  ./scripts/lab_run.sh --sim"
+  log OK "robot $ROBOT_IP reachable"
+else
+  log INFO "sim_only fallback: skipping the robot reachability check (no hardware needed)."
+fi
 
-# ---- X11 + stale container ----
+# ---- X11 (a native lab Z-Book uses Xorg cookie auth, unlike home WSLg) + stale container ----
 xhost +local: >/dev/null 2>&1 || true
+X11_ARGS=(-e DISPLAY="${DISPLAY:-:0}" -e QT_X11_NO_MITSHM=1 -v /tmp/.X11-unix:/tmp/.X11-unix)
+XAUTH="${XAUTHORITY:-$HOME/.Xauthority}"
+if [ -f "$XAUTH" ]; then
+  X11_ARGS+=(-e XAUTHORITY="$XAUTH" -v "$XAUTH:$XAUTH:ro")     # pass the cookie so the non-root container user can open the display
+  log OK "passing X authority cookie ($XAUTH) for the GUI on a native display"
+else
+  log WARN "no X cookie at $XAUTH; if the GUI won't open on a native display, run:  xhost +SI:localuser:\$(id -un)"
+fi
 docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
 
 log INFO "launching FULL DEMO (mode:=both) inside '$IMAGE' (Ctrl-C to stop)"
@@ -108,9 +133,9 @@ echo >&2
 
 # ---- run: rootful uses the course --user $(id -u). HARD REQUIREMENT 3b: /scan visible inside, else FAIL. ----
 exec docker run --rm -it --name "$CONTAINER" --net=host \
-  -e DISPLAY="${DISPLAY:-:0}" -e QT_X11_NO_MITSHM=1 -v /tmp/.X11-unix:/tmp/.X11-unix \
+  "${X11_ARGS[@]}" \
   -v "$WS:/ws" -w /ws -e HOME=/ws \
-  -e TURTLEBOT3_MODEL=burger -e ROS_DOMAIN_ID="$DOMAIN" \
+  -e TURTLEBOT3_MODEL=burger -e ROS_DOMAIN_ID="$DOMAIN" -e DT_MODE="$MODE" \
   --user "$(id -u):$(id -g)" "$IMAGE" bash -lc '
     set -e
     source /opt/ros/jazzy/setup.bash
@@ -119,16 +144,19 @@ exec docker run --rm -it --name "$CONTAINER" --net=host \
       echo "FATAL: turtlebot3 stack not resolvable inside the image (checked /opt/ros/jazzy and"
       echo "       /opt/turtlebot3_ws/install). This image lacks the stock turtlebot3 packages."; exit 4
     fi
-    echo "-- verifying the real-robot link: waiting up to 40s for /scan from inside the container --"
-    ok=0; for _ in $(seq 1 40); do ros2 topic list 2>/dev/null | grep -qx /scan && { ok=1; break; }; sleep 1; done
-    if [ "$ok" != 1 ]; then
-      echo "FATAL: robot /scan NOT visible from inside the container — Pi bringup not up, wrong"
-      echo "       ROS_DOMAIN_ID, not on Wi-Fi AP2IRR10, or Docker networking cannot reach the robot."
-      echo "       both cannot run. Fix and re-run; never record a demo on a dead link."; exit 5
+    if [ "$DT_MODE" = both ]; then
+      echo "-- verifying the real-robot link: waiting up to 40s for /scan from inside the container --"
+      ok=0; for _ in $(seq 1 40); do ros2 topic list 2>/dev/null | grep -qx /scan && { ok=1; break; }; sleep 1; done
+      if [ "$ok" != 1 ]; then
+        echo "FATAL: robot /scan NOT visible from inside the container — Pi bringup not up, wrong"
+        echo "       ROS_DOMAIN_ID, not on Wi-Fi AP2IRR10, or Docker networking cannot reach the robot."
+        echo "       both cannot run. Fix and re-run (or use --sim); never record a demo on a dead link."; exit 5
+      fi
+      echo "-- real link OK (/scan visible). --"
     fi
-    echo "-- real link OK (/scan visible). colcon build --packages-select algae_dt --"
+    echo "-- colcon build --packages-select algae_dt --"
     colcon build --packages-select algae_dt
     source install/setup.bash
-    echo "-- ros2 launch algae_dt bringup.launch.py mode:=both --"
-    exec ros2 launch algae_dt bringup.launch.py mode:=both
+    echo "-- ros2 launch algae_dt bringup.launch.py mode:=$DT_MODE --"
+    exec ros2 launch algae_dt bringup.launch.py mode:="$DT_MODE"
   '

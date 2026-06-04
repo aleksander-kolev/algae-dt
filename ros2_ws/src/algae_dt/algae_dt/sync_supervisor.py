@@ -54,6 +54,8 @@ class SyncSupervisor(Node):
         self.csv_prefix = gp('sync_log_csv', 'sync_metrics')
         self.csv_enable = gp('sync_log_enable', True)
         self.csv_dir = gp('sync_log_dir', '.')
+        self.stop_skew_budget_ms = gp('stop_skew_ms', 300.0)
+        self.pose_timeout_s = gp('sync_pose_timeout_s', 2.0)
 
         self._both = self.mode == 'both'
 
@@ -72,6 +74,9 @@ class SyncSupervisor(Node):
         self._t_sim_stop = None
         self._safety_blocked = False
         self._pending_stop_skew = None
+        self._t_real_pose = None
+        self._t_sim_pose = None
+        self._t_start = self._now()
 
         # publishers
         self.pub_err = self.create_publisher(Vector3, '/dt/sync_error', 10)
@@ -105,9 +110,16 @@ class SyncSupervisor(Node):
     def _now(self) -> float:
         return self.get_clock().now().nanoseconds * 1e-9
 
-    def _stamp_s(self, stamp) -> float:
+    @staticmethod
+    def _valid_stamp(stamp) -> float | None:
+        """Header time in seconds, or None when unset/non-positive so callers can DROP a sample
+        rather than fabricate one (RULES §C 'never swallow silently', F6)."""
         s = stamp.sec + stamp.nanosec * 1e-9
-        return s if s > 0.0 else self._now()
+        return s if s > 0.0 else None
+
+    def _stamp_s(self, stamp) -> float:
+        s = self._valid_stamp(stamp)
+        return s if s is not None else self._now()
 
     @staticmethod
     def _xyyaw(ps: PoseStamped):
@@ -131,8 +143,14 @@ class SyncSupervisor(Node):
         return f
 
     # -------------------------------------------------------------- callbacks
-    def _on_real_pose(self, msg): self._real_pose = self._xyyaw(msg)
-    def _on_sim_pose(self, msg): self._sim_pose = self._xyyaw(msg)
+    def _on_real_pose(self, msg):
+        self._real_pose = self._xyyaw(msg)
+        self._t_real_pose = self._now()
+
+    def _on_sim_pose(self, msg):
+        self._sim_pose = self._xyyaw(msg)
+        self._t_sim_pose = self._now()
+
     def _on_active_scan(self, msg): self._active_front = self._front(msg)
     def _on_sim_scan(self, msg): self._sim_front = self._front(msg)
 
@@ -140,17 +158,27 @@ class SyncSupervisor(Node):
         moving = (abs(msg.twist.linear.x) > self.motion_eps_mps
                   or abs(msg.twist.angular.z) > self.motion_eps_radps)
         if moving and not self._cmd_moving:
-            self._t_cmd = self._stamp_s(msg.header.stamp)
-            self._awaiting_motion = True
+            t = self._valid_stamp(msg.header.stamp)
+            if t is None:
+                self.get_logger().warn("dropping latency sample: /cmd_vel has no valid stamp",
+                                       throttle_duration_sec=5.0)
+            else:
+                self._t_cmd = t
+                self._awaiting_motion = True
         self._cmd_moving = moving
 
     def _on_active_odom(self, msg: Odometry) -> None:
         moving = self._odom_moving(msg)
-        now = self._stamp_s(msg.header.stamp)
+        raw = self._valid_stamp(msg.header.stamp)
+        now = raw if raw is not None else self._now()
         if self._awaiting_motion and moving and self._t_cmd is not None:
-            self._latency_ms = max(0.0, metrics.latency_ms(self._t_cmd, now))
-            self.pub_latency.publish(Float64(data=self._latency_ms))
-            self._awaiting_motion = False
+            if raw is None:
+                self.get_logger().warn("dropping latency sample: /dt/odom_active has no valid stamp",
+                                       throttle_duration_sec=5.0)
+            else:
+                self._latency_ms = max(0.0, metrics.latency_ms(self._t_cmd, raw))
+                self.pub_latency.publish(Float64(data=self._latency_ms))
+                self._awaiting_motion = False
         if self._real_moving and not moving:
             self._t_real_stop = now
         self._real_moving = moving
@@ -174,9 +202,23 @@ class SyncSupervisor(Node):
                 self._pending_stop_skew = (self._t_real_stop - self._t_sim_stop) * 1000.0
         self._safety_blocked = blocked
 
+    def _stream_ok(self) -> bool:
+        """True iff both pose streams have reported within pose_timeout_s (drives fail-loud, F5)."""
+        now = self._now()
+        for t in (self._t_real_pose, self._t_sim_pose):
+            if t is None or (now - t) > self.pose_timeout_s:
+                return False
+        return True
+
     # --------------------------------------------------------------- sync tick
     def _on_sync_timer(self) -> None:
-        if self._real_pose is None or self._sim_pose is None:
+        if not self._stream_ok():
+            # Startup: stay quiet until the timeout elapses. After that a missing/stale pose stream
+            # IS a desync -> fail loud (sync_ok False + alert), never silently skip (F5).
+            if self._now() - self._t_start > self.pose_timeout_s:
+                self.pub_ok.publish(Bool(data=False))
+                self.pub_alerts.publish(String(
+                    data="SYNC pose stream stale/absent (a world is not reporting)"))
             return
         sim_front = self._sim_front if self._both else self._active_front   # 0 delta if single world
         err = sync.compute(self._real_pose, self._sim_pose, self._active_front, sim_front)
@@ -191,13 +233,18 @@ class SyncSupervisor(Node):
         if not math.isnan(self._latency_ms) and self._latency_ms > self.latency_budget_ms:
             self.pub_alerts.publish(String(data=(
                 f"LATENCY {self._latency_ms:.0f} ms > budget {self.latency_budget_ms:.0f} ms")))
+        if (self._pending_stop_skew is not None
+                and abs(self._pending_stop_skew) > self.stop_skew_budget_ms):
+            self.pub_alerts.publish(String(data=(
+                f"STOP-SKEW {self._pending_stop_skew:.0f} ms > budget "
+                f"{self.stop_skew_budget_ms:.0f} ms")))
 
         if self._csv:
             lat = 0.0 if math.isnan(self._latency_ms) else self._latency_ms
             self._csv.write(metrics.csv_row(self._now(), err.dxy, err.dyaw, err.sensor,
                                             lat, ok, self._pending_stop_skew) + '\n')
             self._csv.flush()
-            self._pending_stop_skew = None
+        self._pending_stop_skew = None     # F4: reset every tick (was only inside the csv block)
 
     def destroy_node(self):
         if self._csv:

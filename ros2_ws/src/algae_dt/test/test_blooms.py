@@ -93,9 +93,11 @@ def test_mark_unknown_id_raises():
         B.mark_treated(_field((1.0, 0.0)), 99)
 
 
-def test_counts_summarises_states():
+def test_retry_skipped_resets_only_skipped():
     f = _field((1.0, 0.0), (2.0, 0.0), (3.0, 0.0))
     f = B.mark_treated(f, 0)
-    f = B.set_active(f, 1)
-    c = B.counts(f)
-    assert c[B.TREATED] == 1 and c[B.ACTIVE] == 1 and c[B.PENDING] == 1
+    f = B.mark_skipped(f, 1)                 # bloom 2 stays pending
+    out = B.retry_skipped(f)
+    assert {b.id: b.state for b in out.blooms} == {0: B.TREATED, 1: B.PENDING, 2: B.PENDING}
+    # immutability: original is untouched
+    assert {b.id: b.state for b in f.blooms} == {0: B.TREATED, 1: B.SKIPPED, 2: B.PENDING}

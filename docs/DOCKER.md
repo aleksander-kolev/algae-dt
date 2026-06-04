@@ -53,8 +53,7 @@ Windows/PowerShell headless shell: `docker/run.ps1` (no display — use WSL for 
 ## Headless simulation (verification without a display)
 Gazebo runs server-only when no GUI is needed (topics/Nav2/mission still run):
 ```bash
-export GZ_HEADLESS=1            # honored by bringup.launch.py (gz sim -s, no gui)
-ros2 launch algae_dt bringup.launch.py mode:=sim_only
+ros2 launch algae_dt bringup.launch.py mode:=sim_only headless:=true
 ```
 
 ## Relationship to the course image

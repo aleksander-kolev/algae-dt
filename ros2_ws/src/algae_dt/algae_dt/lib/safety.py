@@ -25,7 +25,7 @@ def front_min_range(ranges, angle_min: float, angle_increment: float,
     """Minimum VALID range within the FULL-width front sector centred on 0 rad.
 
     `sector_rad` is the whole cone, so the half-angle is sector_rad/2. Beam angles are wrapped to
-    (-pi, pi] before the sector test (a near return just behind 0 rad still counts as ahead).
+    [-pi, pi) before the sector test (a near return just behind 0 rad still counts as ahead).
     Beams that are NaN, +/-inf, or outside [range_min, range_max] are ignored. Returns +inf when
     no valid beam falls in the sector (treated downstream as "nothing ahead").
     """
@@ -36,7 +36,7 @@ def front_min_range(ranges, angle_min: float, angle_increment: float,
         if not (range_min <= r <= range_max):
             continue
         ang = angle_min + i * angle_increment
-        ang = (ang + math.pi) % (2.0 * math.pi) - math.pi   # wrap to (-pi, pi]
+        ang = (ang + math.pi) % (2.0 * math.pi) - math.pi   # wrap to [-pi, pi)
         if -half <= ang <= half and r < best:
             best = r
     return best

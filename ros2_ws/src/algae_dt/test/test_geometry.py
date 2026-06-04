@@ -30,6 +30,15 @@ def test_world_to_pixel_row_is_flipped():
     assert row_high < row_low
 
 
+def test_pixel_world_pixel_is_identity():
+    # A cell CENTRE must round-trip back to the SAME cell: world_to_pixel(pixel_to_world(c,r))==(c,r).
+    # This is the property goal-projection (lib.occupancy) and GUI click-to-place rely on; it exposes
+    # the row off-by-one (int() applied to the whole flip expression instead of flooring the divide).
+    for col, row in [(0, 0), (10, 20), (43, 55), (85, 109), (50, 0), (0, 109)]:
+        x, y = g.pixel_to_world(col, row, MAP)
+        assert g.world_to_pixel(x, y, MAP) == (col, row), f"round-trip lost ({col},{row})"
+
+
 def test_euclidean():
     assert math.isclose(g.euclidean(0.0, 0.0, 3.0, 4.0), 5.0)
 

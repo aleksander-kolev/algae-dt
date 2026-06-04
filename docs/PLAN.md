@@ -9,9 +9,9 @@ pure libs, integration-tested in `sim_only` before it ever goes to the lab. Task
 > exact triggers. **Option A is mandatory** (Option B caps at 7/12). Submission package + demo script:
 > `docs/SUBMISSION.md`, `docs/DEMO_SCRIPT.md`. Due **Mon 22 Jun 2026 21:00**.
 
-> **IMPLEMENTATION STATUS — Phases 1→6 DONE, TDD, integration-verified.** All 8 pure libs + 4 nodes
+> **IMPLEMENTATION STATUS — Phases 1→6 DONE, TDD, integration-verified.** All 9 pure libs + 4 nodes
 > (+ `fake_robot`, `dynamic_obstacle`) implemented; full `bringup.launch.py` (sim_only|real_only|both
-> + headless/use_fake_robot); reproducible `algae-dt:dev` image. **103 tests pass** + clean
+> + headless/use_fake_robot); reproducible `algae-dt:dev` image. **145 tests pass** + clean
 > `colcon build`; `sim_only` runs end-to-end headless (Nav2 active, AMCL localized, TwistStamped
 > chokepoint); `both` collision-free. Evidence per deliverable → `docs/VERIFICATION.md`. Remaining is
 > NON-code: the Week-9 demo video + lab-hardware validation, and the full navigate-and-spray demo on a
@@ -72,11 +72,11 @@ downloads — our nodes are exactly pub/sub built on this primitive), ROS 2 topi
 
 ## Phase 2 — Fan-in/fan-out mediator + bloom mission  (home)  → Rubric ①, ③
 - **T2.1** `lib/geometry.py`, `lib/blooms.py` (immutable) ported + TDD (world↔pixel, nearest-untreated).
-- **T2.2** `mission_runner`: `BasicNavigator` to each bloom centre → 5 s spin-spray on
+- **T2.2** `mission_runner`: `BasicNavigator` to each bloom centre (goal projected clear of walls) → 3-spin spray on
   `/dt/cmd_vel_raw`; `/dt/markers`, `/dt/mission_state`; honest accounting (no-spray-on-failure,
-  aborted→pending). **The Nav2 controller `cmd_vel`→`/dt/cmd_vel_raw` remap is done in the LAUNCH
-  (SetRemap around the `turtlebot3_navigation2` include), NOT on `mission_runner`** (which publishes
-  no cmd_vel). **Pass Nav2 a `params_file` setting `enable_stamped_cmd_vel: true`** on
+  aborted→pending). **Nav2's FINAL velocity is routed to `/dt/cmd_vel_raw` by rewriting
+  `collision_monitor.cmd_vel_out_topic` (RewrittenYaml, NOT a SetRemap), NOT on `mission_runner`** (which
+  publishes no cmd_vel). **Pass Nav2 a `params_file` setting `enable_stamped_cmd_vel: true`** on
   controller/behavior/velocity_smoother (Nav2 Jazzy defaults to plain `Twist`; the bus is
   `TwistStamped`) — build it from turtlebot3's bundled params via `nav2_common` RewrittenYaml so the
   tuned params are kept (RULES §B-1/B-2).

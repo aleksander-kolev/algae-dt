@@ -2,7 +2,7 @@
 
 A bidirectional **digital twin**: a real TurtleBot3 Burger and a Gazebo Harmonic twin run in
 parallel with bidirectional comms + state synchronization. An operator places algae blooms; the
-active robot Nav2-navigates to each, sprays (5 s spin), and a 25 cm dual-LiDAR gate stops forward
+active robot Nav2-navigates to each, sprays (3 full spins), and a 25 cm dual-LiDAR gate stops forward
 motion in either world. Built the **course-recommended way**: WSL+Docker / lab laptop + the
 **default turtlebot3 packages** + one **custom `algae_dt` package** (the thin DT layer).
 
@@ -53,8 +53,8 @@ home with a kinematic stand-in, no hardware).
 | `docs/SUBMISSION.md` / `docs/DEMO_SCRIPT.md` | PoC submission package + timed 2–3 min demo script. |
 
 ## Status
-**Implemented and tested.** All 6 pure libs + 4 nodes (+ `fake_robot`, `dynamic_obstacle`) are
-done with **103 passing tests** (unit + in-process rclpy integration) and a clean
+**Implemented and tested.** All 9 pure libs + 4 nodes (+ `fake_robot`, `dynamic_obstacle`) are
+done with **145 passing tests** (unit + in-process rclpy integration) and a clean
 `colcon build --packages-select algae_dt`. `sim_only` launches end-to-end headless (Nav2 active +
 AMCL auto-localized, the TwistStamped chokepoint, all `/dt/*` flowing); `both` keeps the real (bare)
 and sim (`/sim/*`) topics collision-free with the mediator fanning out to both. The full

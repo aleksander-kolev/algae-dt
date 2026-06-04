@@ -35,14 +35,15 @@ runtime failure), **C) coding & process conventions**.
    `/dt/cmd_vel_raw` is **`TwistStamped`** (one type — never mix `Twist`/`TwistStamped` on it). The
    mediator forwards `TwistStamped`→ real `/cmd_vel`, and the **runtime-verified** type → `/sim/cmd_vel`
    (`ros2 topic type /sim/cmd_vel`; on Jazzy turtlebot3_gazebo this is typically `TwistStamped` too).
-2. **Set `enable_stamped_cmd_vel: true` on Nav2** (controller_server / behavior_server /
-   velocity_smoother) — Nav2 on Jazzy defaults to plain `Twist` (per Nav2 migration/Jazzy docs), so
-   without this its commands won't match the `TwistStamped` bus and **the robot activates but never
-   moves** (silent). Inject it via a **`params_file`** passed to `navigation2.launch.py` (the
-   `/**`-wildcard in `twin.yaml` does NOT reach Nav2 — Nav2 loads its own params). Also **remap Nav2's
-   controller `cmd_vel` → `/dt/cmd_vel_raw` in the launch** (via `SetRemap` around the
-   `turtlebot3_navigation2` include — NOT on `mission_runner`, which is a BasicNavigator action client
-   and publishes no `cmd_vel`), so the mediator stays the single safety chokepoint for autonomy.
+2. **Nav2 speaks `TwistStamped` and its FINAL velocity is routed through the mediator.** Nav2 on Jazzy
+   defaults to plain `Twist`; without `enable_stamped_cmd_vel: true` its commands won't match the
+   `TwistStamped` bus and **the robot activates but never moves** (silent). The stock `burger.yaml`
+   already sets it true on controller/behavior/velocity_smoother, so we pass that `burger.yaml` to
+   `nav2_bringup` as a **`params_file`** (the `/**`-wildcard in `twin.yaml` does NOT reach Nav2 — Nav2
+   loads its own params). In the SAME `RewrittenYaml` we **rewrite `collision_monitor.cmd_vel_out_topic`
+   → `/dt/cmd_vel_raw`** — a key-rewrite, NOT a `SetRemap`, and NOT on `mission_runner` (a
+   BasicNavigator action client that publishes no `cmd_vel`) — so Nav2's last-stage velocity lands on
+   our safety bus and the mediator gates it onto `/cmd_vel`, the single safety chokepoint for autonomy.
 3. **Topic-collision rule (course-stated):** real and sim must NEVER publish the same topic name.
    Real = bare (`/scan /odom /cmd_vel /tf`), sim = `/sim/*`, sim TF off the global `/tf` in `both`.
 4. **`use_sim_time:=true` ONLY in `sim_only`.** In `real_only`/`both` the real robot leads on wall

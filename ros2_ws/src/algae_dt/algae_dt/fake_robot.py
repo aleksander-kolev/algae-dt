@@ -19,7 +19,7 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import BatteryState, LaserScan
 from tf2_ros import TransformBroadcaster
 
-from algae_dt.lib import geometry, sync
+from algae_dt.lib import geometry, hud, sync
 
 
 class FakeRobot(Node):
@@ -34,6 +34,8 @@ class FakeRobot(Node):
         self.batt_start = gp('battery_sim_start_v', 12.5)
         self.batt_drain = gp('battery_sim_drain_vps', 0.02)
         self.batt_min = gp('battery_sim_min_v', 11.2)
+        self.batt_empty_v = gp('battery_empty_v', 9.0)
+        self.batt_full_v = gp('battery_full_v', 12.6)
         self.cmd_rate = gp('cmd_rate_hz', 20.0)
 
         self._pose = (0.0, 0.0, 0.0)
@@ -101,6 +103,7 @@ class FakeRobot(Node):
         s.header.frame_id = 'base_scan'
         s.angle_min = -math.pi
         s.angle_increment = 2.0 * math.pi / self.scan_n
+        s.angle_max = s.angle_min + (self.scan_n - 1) * s.angle_increment   # consistent geometry for Nav2
         s.range_min = self.range_min
         s.range_max = self.range_max
         s.ranges = [self.scan_far] * self.scan_n
@@ -113,7 +116,7 @@ class FakeRobot(Node):
         b = BatteryState()
         b.header.stamp = self.get_clock().now().to_msg()
         b.voltage = float(v)
-        b.percentage = max(0.0, min(1.0, (v - 9.0) / (12.6 - 9.0)))
+        b.percentage = hud.battery_percentage(v, self.batt_empty_v, self.batt_full_v)
         b.present = True
         self.pub_batt.publish(b)
 

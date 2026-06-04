@@ -51,15 +51,9 @@ def within_tolerance(err: SyncError, tol_pose_xy: float,
             and err.sensor <= tol_sensor_range)
 
 
-def classify(err: SyncError, tol_pose_xy: float,
-             tol_pose_yaw: float, tol_sensor_range: float) -> str:
-    """'ok' when in tolerance, else 'warn' (drives /dt/sync_ok and /dt/alerts)."""
-    return 'ok' if within_tolerance(err, tol_pose_xy, tol_pose_yaw, tol_sensor_range) else 'warn'
-
-
 def integrate_unicycle(x: float, y: float, yaw: float,
                        v: float, omega: float, dt: float) -> tuple[float, float, float]:
-    """Exact constant-(v, omega) unicycle step over dt; yaw wrapped to (-pi, pi].
+    """Exact constant-(v, omega) unicycle step over dt; yaw normalized to [-pi, pi).
 
     Used for the sim_only commanded shadow pose (integrate /dt/cmd_vel_raw): the "real" pose
     against which the achieved sim pose is compared when no physical robot is present.

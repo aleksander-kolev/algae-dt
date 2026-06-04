@@ -6,7 +6,6 @@ safety-event `stop_skew_ms` (real-stop vs sim-stop time delta) blank on ordinary
 Tests: test/test_metrics.py.
 
 - latency_ms(t_command_s, t_motion_s) -> float   (command -> motion onset)
-- data_age_ms(t_now_s, t_stamp_s) -> float        (sensor/data age)
 - csv_header() -> str
 - csv_row(stamp_s, dxy, dyaw, sensor_err, latency_ms, in_tolerance, stop_skew_ms=None) -> str
 """
@@ -20,10 +19,6 @@ _COLUMNS = ('stamp_s', 'dxy_m', 'dyaw_rad', 'sensor_err_m',
 
 def latency_ms(t_command_s: float, t_motion_s: float) -> float:
     return (t_motion_s - t_command_s) * 1000.0
-
-
-def data_age_ms(t_now_s: float, t_stamp_s: float) -> float:
-    return (t_now_s - t_stamp_s) * 1000.0
 
 
 def csv_header() -> str:

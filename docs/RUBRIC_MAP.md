@@ -61,7 +61,7 @@ plus measured error/latency + documented tolerances + alerts; mirror stays consi
 - **25 cm dual-LiDAR safety stop** — obstacle in `/scan` OR `/sim/scan` < 0.25 m zeroes forward
   motion on BOTH robots (course Lidar-DT Mini-Project 3, verbatim).
 - **Nav2 dynamic-obstacle avoidance** — the active robot replans around obstacles en route to a bloom.
-- **Task interaction (the algae "spray")** — navigate to the bloom centre and spin-in-place 5 s; the
+- **Task interaction (the algae "spray")** — navigate to the bloom centre and spin in place 3 full turns; the
   sim mirrors the interaction. (Optional stretch: push/transport an object to satisfy the course's
   "Object Manipulation/Transport" row literally.)
 
@@ -104,7 +104,7 @@ critical battery. Demoed explicitly.
 - [ ] Clip: GUI sync banner amber/red + `/dt/alerts` when out of tolerance.
 - [ ] Clip: obstacle in real OR sim → both robots stop (25 cm); measured stop-skew within `stop_skew_ms`.
 - [ ] Clip: Nav2 reroute around a dynamic obstacle.
-- [ ] Clip: bloom green only after full 5 s spray; nav-failed bloom grey.
+- [ ] Clip: bloom green only after the full 3-spin spray; nav-failed bloom grey.
 - [ ] Clip: E-STOP halts both + latches; RESUME recovers.
 - [ ] Tolerance thresholds documented in `config/twin.yaml` (with rationale comments).
 - [ ] Context diagram (`docs/CONTEXT_DIAGRAM.md`) rendered for the Week-4 review.

@@ -4,8 +4,6 @@ The CSV is the trustworthy evidence for the review, so its formatting is unit-pi
 columns, NaN/inf handled, booleans as 0/1, and the optional safety-event stop_skew_ms blank on
 ordinary ticks.
 """
-import math
-
 from algae_dt.lib import metrics as M
 
 INF = float('inf')
@@ -14,10 +12,6 @@ INF = float('inf')
 def test_latency_ms_sign_and_value():
     assert M.latency_ms(1.0, 1.25) == 250.0
     assert M.latency_ms(2.0, 2.0) == 0.0
-
-
-def test_data_age_ms():
-    assert math.isclose(M.data_age_ms(10.0, 9.5), 500.0)
 
 
 def test_csv_header_columns():

@@ -10,7 +10,7 @@ packages, the operator, the real robot, the sim, and any online source are exter
    ┌───────────┐  click-to-place │  ┌───────────────┐      ┌──────────────────┐  │
    │  OPERATOR │ ───/dt/blooms──▶ │  │ operator_gui  │      │  mission_runner  │  │
    │  (PyQt5)  │ ◀── /dt/* state─ │  │ (subs /dt/*)  │      │ (Nav2 to bloom + │  │
-   └───────────┘                  │  └───────────────┘      │  5 s spray)      │  │
+   └───────────┘                  │  └───────────────┘      │  3-spin spray)   │  │
                                   │        │ start/stop      └────────┬─────────┘  │
                                   │        ▼ /dt/mission_cmd           │ /dt/cmd_vel_raw
    ┌───────────────┐  /scan /odom │  ┌──────────────────────────────────────────┐ │

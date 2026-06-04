@@ -19,9 +19,13 @@ class MapInfo:
 
 
 def world_to_pixel(x: float, y: float, m: MapInfo) -> tuple[int, int]:
-    """World metres -> (col, row) pixel. Row is flipped (image origin top-left)."""
+    """World metres -> (col, row) pixel. Row is flipped (image origin top-left).
+
+    The flip floors the (y-origin)/resolution term BEFORE subtracting from height-1, so a cell centre
+    round-trips exactly: world_to_pixel(pixel_to_world(c,r)) == (c,r) (test_geometry pins this). Doing
+    int() over the whole `height-1-(...)` expression instead drops the row by one (truncates R-0.5)."""
     col = int((x - m.origin_x) / m.resolution)
-    row = int(m.height_px - 1 - (y - m.origin_y) / m.resolution)
+    row = m.height_px - 1 - int((y - m.origin_y) / m.resolution)
     return col, row
 
 
@@ -51,7 +55,7 @@ def compose_pose_2d(a: tuple[float, float, float],
     """Compose two planar poses a∘b: express pose b (given in a's child frame) in a's parent frame.
 
     Used to put an odom-frame robot pose into the map frame: compose_pose_2d(map_T_odom, odom_pose).
-    Returns (x, y, yaw) with yaw wrapped to (-pi, pi].
+    Returns (x, y, yaw) with yaw normalized to [-pi, pi) (the bare wrap; angle_diff uses (-pi, pi]).
     """
     ax, ay, ayaw = a
     bx, by, byaw = b

@@ -20,8 +20,14 @@
                                    # margin; matches the course mini-project so behaviour is comparable.
     front_sector_rad: 0.70         # FULL cone width treated as "ahead" (= +/-0.35 rad half-angle).
                                    # safety.front_min_range MUST treat this as full-width (test pins it).
-    max_linear_mps: 0.22           # Burger hardware max forward speed.
-    max_angular_radps: 2.0         # capped below the 2.84 hardware max for smoothness.
+    max_linear_mps: 0.22           # Burger hardware max forward speed; the mediator clamps Nav2's
+                                   # planned max_speed_xy (0.3) down to this real limit (correct, expected).
+    max_angular_radps: 2.84        # mediator's FINAL angular clamp (safety authority) = the Burger
+                                   # HARDWARE max. Nav2's controller plans at max_vel_theta=1.0 (well
+                                   # within this) so there is NO angular divergence on nav; the higher
+                                   # ceiling lets the in-place spray spin briskly (visible under a low
+                                   # sim real-time-factor). The mediator only ever REDUCES angular for
+                                   # the safety gate; forward motion is still capped by max_linear_mps.
     scan_range_min_m: 0.12         # LDS-02
     scan_range_max_m: 3.5          # LDS-02
 
@@ -42,10 +48,12 @@
     latency_budget_ms: 250.0      # command->motion + scan-age budget. Rationale: 20 Hz cmd loop (50 ms)
                                   # + DDS/Wi-Fi over AP2IRR10; >250 ms means a real desync to flag.
     stop_skew_ms: 300.0           # max allowed real-stop vs sim-stop time skew on a safety event
-                                  # (Rubric ③ "synchronous" — measured, logged to CSV).
+                                  # (Rubric ③ "synchronous" — measured, logged to CSV, AND alerted).
+    sync_pose_timeout_s: 2.0      # if either world's pose stream is silent/stale this long, the
+                                  # supervisor fails loud (sync_ok False + /dt/alerts) rather than going dark.
     sync_log_csv: "sync_metrics"  # CSV prefix; sync_supervisor appends <prefix>_<stamp>.csv
     sync_log_enable: true
-    # command->motion latency method (PLAN T3.1): mediator stamps each /dt/cmd_vel_raw it forwards;
+    # command->motion latency method (PLAN T3.1): the mediator stamps every gated /cmd_vel it emits;
     # sync_supervisor marks motion onset when |odom.twist.linear|>motion_eps_mps OR
     # |angular|>motion_eps_radps, and reports t_motion - t_cmd (clock per mode: sim time in sim_only).
     motion_eps_mps: 0.02
@@ -53,11 +61,14 @@
     # sim_only sync source (PLAN T3.1 / RUBRIC ②): with no real robot, the "shadow real pose" is the
     # COMMANDED pose integrated from /dt/cmd_vel_raw; sync error = commanded-vs-achieved sim pose.
     # (Same idea as the synthetic battery below — keeps pillar ② demonstrable in the fallback env.)
-    sim_only_sync_source: commanded   # commanded | none
+    sim_only_sync_source: commanded   # commanded => mediator publishes the integrated-command shadow
+                                      # as /dt/real_pose (the sim_only sync source); none => no shadow.
 
     # --- battery (non-motion state sync) ---
     battery_low_v: 11.0            # GUI battery banner turns AMBER below this (operator_gui, PLAN T4.2).
     battery_critical_v: 10.5       # real battery below this => auto E-STOP on /dt/estop (mediator).
+    battery_empty_v: 9.0           # LiPo 0% reference for the GUI gauge (lib.hud.battery_percentage).
+    battery_full_v: 12.6           # LiPo 100% reference (3S full charge); single source of truth.
     # synthetic battery for sim_only (so battery state-sync is demonstrable without a robot);
     # OWNED by twin_mediator (publishes /dt/health from this when mode==sim_only):
     battery_sim_start_v: 12.5
@@ -65,13 +76,30 @@
     battery_sim_min_v: 11.2        # stays green; demo only
 
     # --- mission / spray (Rubric ③ task interaction) ---
-    spray_seconds: 5.0             # spin-in-place duration at the bloom centre
-    spray_omega_radps: 1.0
+    spray_revolutions: 3.0         # chemical spraying = this many FULL in-place spins at the bloom
+                                   # centre (course "spin-spray" task). Duration = revs*2*pi/omega, so
+                                   # at spray_omega_radps below that is ~18.8 s; raise omega to spray faster.
+    spray_omega_radps: 2.8         # in-place spin rate during spray (just under the 2.84 clamp). Chosen
+                                   # high on purpose: under a throttled sim real-time-factor (~0.5) the
+                                   # wall-clock spin rate is omega*RTF, so omega=1.0 looked like a slow
+                                   # drift (~0.5 rad/s real). 2.8 -> ~1.4 rad/s real = a brisk, visible
+                                   # spin; the closed-loop still guarantees exactly spray_revolutions turns.
+    spray_time_margin: 2.0         # spray is CLOSED-LOOP on odom yaw (spins until the robot has truly
+                                   # turned spray_revolutions*360, not a fixed time, so a throttled/
+                                   # slow sim still completes the full count). Backstop = this x the
+                                   # nominal spin time, so a stalled odom can't spin forever.
     bloom_radius_m: 0.15           # drawn marker radius + mission bookkeeping (operator_gui/mission)
-    standoff_m: 0.0                # 0 => Nav2 goal IS the bloom centre
     center_tol_m: 0.50             # GROSS arrival sanity bound (sim_only only); Nav2 xy_goal_tolerance
                                    # (0.15) is authoritative. Generous so deceleration pose-lag never
-                                   # false-rejects a real arrival.
+                                   # false-rejects a real arrival. ALSO the max distance mission_runner
+                                   # will project a goal off a wall (a bloom needing a bigger move is
+                                   # treated as unreachable and skipped, not chased into the inflation).
+    goal_clearance_m: 0.30         # mission_runner projects each bloom goal to the nearest point with
+                                   # >= this clearance to any wall (static map), so Nav2 never gets a
+                                   # goal inside the costmap inflation/lethal zone (the "bloom near a
+                                   # wall -> robot starts then does nothing" fix). Rationale: footprint
+                                   # 0.105 m + margin > the 0.25 m safety-gate stop, so the projected
+                                   # approach pose is reachable AND clear of the forward-stop gate.
     nav_goal_timeout_s: 60.0
 
     # --- map (course mapFiles.zip base map; verified 86x110 @ 0.05 m/px) ---

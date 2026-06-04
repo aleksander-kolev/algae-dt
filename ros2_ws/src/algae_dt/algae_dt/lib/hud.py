@@ -17,6 +17,14 @@ def battery_color(voltage: float, low_v: float, critical_v: float) -> str:
     return 'green'
 
 
+def battery_percentage(voltage: float, empty_v: float, full_v: float) -> float:
+    """Linear state-of-charge in [0, 1] from a LiPo voltage (empty_v -> 0, full_v -> 1, clamped).
+    Single source of truth so nodes never hardcode the empty/full endpoints (RULES §C)."""
+    if full_v <= empty_v:
+        return 0.0
+    return max(0.0, min(1.0, (voltage - empty_v) / (full_v - empty_v)))
+
+
 def scan_points(ranges, angle_min: float, angle_increment: float,
                 range_min: float, range_max: float) -> list[tuple[float, float]]:
     """Valid LaserScan beams projected to robot-frame (x, y); NaN/inf/out-of-range dropped."""

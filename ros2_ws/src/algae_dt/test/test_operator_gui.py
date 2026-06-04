@@ -18,7 +18,8 @@ from rclpy.executors import SingleThreadedExecutor       # noqa: E402
 from rclpy.node import Node                               # noqa: E402
 from rclpy.qos import (DurabilityPolicy, QoSProfile,      # noqa: E402
                        ReliabilityPolicy)
-from std_msgs.msg import Bool, String                     # noqa: E402
+from sensor_msgs.msg import BatteryState                   # noqa: E402
+from std_msgs.msg import Bool, Float64, String             # noqa: E402
 from visualization_msgs.msg import MarkerArray            # noqa: E402
 
 from algae_dt import operator_gui                          # noqa: E402
@@ -76,6 +77,41 @@ def test_bridge_publishes_operator_commands():
         ex.shutdown()
         bridge.destroy_node()
         har.destroy_node()
+        rclpy.shutdown()
+
+
+def test_bridge_ingests_dt_state():
+    """The named /dt/* handlers land each message on the matching bridge field (F17 — the inbound
+    mapping was previously untested)."""
+    rclpy.init()
+    bridge = GuiBridge()
+    pub = rclpy.create_node('gui_state_pub')
+    p_mode = pub.create_publisher(String, '/dt/mode', _latched())
+    p_sync = pub.create_publisher(Bool, '/dt/sync_ok', _latched())
+    p_health = pub.create_publisher(BatteryState, '/dt/health', 10)
+    p_lat = pub.create_publisher(Float64, '/dt/latency_ms', 10)
+    p_safety = pub.create_publisher(Bool, '/dt/safety', _latched())
+    p_mstate = pub.create_publisher(String, '/dt/mission_state', _latched())
+    ex = SingleThreadedExecutor()
+    ex.add_node(bridge)
+    ex.add_node(pub)
+    try:
+        p_mode.publish(String(data='both'))
+        p_sync.publish(Bool(data=False))
+        p_health.publish(BatteryState(voltage=11.5))
+        p_lat.publish(Float64(data=42.0))
+        p_safety.publish(Bool(data=True))
+        p_mstate.publish(String(data='navigating:0'))
+        ok = _spin_until(ex, lambda: bridge.mode == 'both' and bridge.sync_ok is False
+                         and abs(bridge.battery_v - 11.5) < 1e-6
+                         and abs(bridge.latency_ms - 42.0) < 1e-6
+                         and bridge.safety_blocked is True
+                         and bridge.mission_state == 'navigating:0')
+        assert ok, "GuiBridge must ingest each /dt/* topic onto the matching field"
+    finally:
+        ex.shutdown()
+        bridge.destroy_node()
+        pub.destroy_node()
         rclpy.shutdown()
 
 

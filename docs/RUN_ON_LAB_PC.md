@@ -27,7 +27,7 @@ Estimate** (below). Teleop in another terminal: the script prints the exact `doc
 mkdir -p ~/turtlebot3_ws/src && cp -r algae-dt/ros2_ws/src/algae_dt ~/turtlebot3_ws/src/
 
 # start the container (Terminal A)
-docker run --rm -it --name turtlebot3_container --net=host -e DISPLAY=$DISPLAY \
+docker run --rm -it --name turtlebot3_container --net=host -e DISPLAY=$DISPLAY -e ROS_DOMAIN_ID=36 \
   -v /tmp/.X11-unix:/tmp/.X11-unix -v $HOME/turtlebot3_ws:/ws --user $(id -u):$(id -g) turtlebot3_ws bash
 # inside Terminal A:
 cd /ws && source /opt/ros/jazzy/setup.bash && source /opt/turtlebot3_ws/install/setup.bash 2>/dev/null
@@ -36,7 +36,8 @@ export TURTLEBOT3_MODEL=burger ROS_DOMAIN_ID=36
 ros2 topic hz /scan                          # robot link OK? (~5 Hz) — robot Pi must be up
 ros2 launch algae_dt bringup.launch.py mode:=both
 
-# more terminals: docker exec -it turtlebot3_container bash  (then source the 3 lines above)
+# more terminals: docker exec -it turtlebot3_container bash  (re-run the source + export lines above,
+#   incl. export ROS_DOMAIN_ID=36, so the new shell joins the robot's domain — else zero topics cross)
 #   teleop:  ros2 run turtlebot3_teleop teleop_keyboard --ros-args -r /cmd_vel:=/dt/cmd_vel_raw
 ```
 (Robot Pi bringup = step 2 above, same as the script way.)

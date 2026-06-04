@@ -25,9 +25,9 @@ from rclpy.qos import (DurabilityPolicy, QoSProfile, ReliabilityPolicy,
 from rclpy.time import Time as RclpyTime
 from sensor_msgs.msg import BatteryState, LaserScan
 from std_msgs.msg import Bool, String
-from tf2_ros import Buffer, TransformListener
+from tf2_ros import Buffer, TransformException, TransformListener
 
-from algae_dt.lib import geometry, safety, sync
+from algae_dt.lib import geometry, hud, safety, sync
 
 INF = float('inf')
 
@@ -60,9 +60,12 @@ class TwinMediator(Node):
         self.batt_sim_start = gp('battery_sim_start_v', 12.5)
         self.batt_sim_drain = gp('battery_sim_drain_vps', 0.02)
         self.batt_sim_min = gp('battery_sim_min_v', 11.2)
+        self.batt_empty_v = gp('battery_empty_v', 9.0)
+        self.batt_full_v = gp('battery_full_v', 12.6)
+        self.sync_source = gp('sim_only_sync_source', 'commanded')   # 'none' disables the shadow real_pose
 
         self._both = self.mode == 'both'
-        self._sim_is_bare = self.mode in ('sim_only',)   # the bare robot is the sim
+        self._sim_is_bare = self.mode == 'sim_only'      # the bare robot is the sim
 
         # --- state ---
         self._last_cmd: TwistStamped | None = None
@@ -136,8 +139,10 @@ class TwinMediator(Node):
             t = self._tf_buffer.lookup_transform('map', 'odom', RclpyTime())
             tr, rot = t.transform.translation, t.transform.rotation
             self._T_map_odom = (tr.x, tr.y, geometry.yaw_from_quaternion(rot.z, rot.w))
-        except Exception:
-            pass
+        except TransformException:
+            pass                                          # map<-odom not published yet (normal pre-AMCL)
+        except Exception as exc:                          # anything else is a real fault -> surface it
+            self.get_logger().warn(f"map<-odom lookup failed: {exc!r}", throttle_duration_sec=5.0)
 
     @staticmethod
     def _pose_xyyaw(p):
@@ -179,7 +184,13 @@ class TwinMediator(Node):
             self._shadow_anchored = True
 
     def _on_sim_odom(self, msg: Odometry) -> None:
-        self.pub_sim_pose.publish(PoseStamped(header=msg.header, pose=msg.pose.pose))
+        # In `both`, lift the sim's odom pose into the MAP frame via the SAME map<-odom as the real
+        # robot (AMCL), so /dt/sim_pose is directly comparable to /dt/real_pose (both MAP frame).
+        # Publishing it raw (odom frame, as before) made the sync discrepancy carry the full
+        # map<-odom offset instead of the true real-vs-sim divergence. The twin starts co-located and
+        # mirrors the real robot 1:1, so the real robot's map<-odom is the right lift for the sim too.
+        map_xyyaw = geometry.compose_pose_2d(self._T_map_odom, self._pose_xyyaw(msg.pose.pose))
+        self.pub_sim_pose.publish(self._map_posestamped(map_xyyaw))
 
     def _on_battery(self, msg: BatteryState) -> None:
         self._battery_v = msg.voltage
@@ -251,7 +262,7 @@ class TwinMediator(Node):
         """Commanded shadow pose for sim_only: anchored to the robot's first MAP pose, then integrate
         the safe command. Published as the 'real' reference (/dt/real_pose, MAP frame) the
         sync_supervisor compares to the achieved sim pose — and the GUI overlays on the map."""
-        if self.mode != 'sim_only' or not self._shadow_anchored:
+        if self.mode != 'sim_only' or self.sync_source != 'commanded' or not self._shadow_anchored:
             return
         if self._shadow_t is None:
             self._shadow_t = now
@@ -271,7 +282,7 @@ class TwinMediator(Node):
             msg = BatteryState()
             msg.header.stamp = self._stamp()
             msg.voltage = float(v)
-            msg.percentage = max(0.0, min(1.0, (v - 9.0) / (12.6 - 9.0)))
+            msg.percentage = hud.battery_percentage(v, self.batt_empty_v, self.batt_full_v)
             msg.present = True
             self.pub_health.publish(msg)
             self._update_battery_estop(v)

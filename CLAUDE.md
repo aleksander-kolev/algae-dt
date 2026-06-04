@@ -20,7 +20,7 @@ A bidirectional **digital twin** for a TU/e 2IRR10 algae-bloom cleaning robot (*
 Burger**, ROS 2 **Jazzy**, **Gazebo Harmonic**). A real Burger and a Gazebo twin run in parallel
 with **bidirectional communication + state synchronization**. An operator places algae blooms on a
 map; the active robot **Nav2-navigates** to each (avoiding static + dynamic obstacles), drives to
-the centre and **spins in place 5 s** ("spraying"), then advances. A **dual-LiDAR 25 cm safety
+the centre and **spins 3 full turns in place** ("spraying"), then advances. A **dual-LiDAR 25 cm safety
 gate** stops forward motion in *either* world. The deliverable runs on the **lab HP Z-Book** and the
 **lab Burger** via the course's documented commands.
 
@@ -71,13 +71,14 @@ Nodes:
   Computes pose/sensor discrepancy + command→motion latency; publishes `/dt/sync_error`,
   `/dt/latency_ms`, `/dt/sync_ok` (Bool); **logs a CSV** and **publishes `/dt/alerts` when out of
   documented tolerance.** (This is the most-overlooked graded item — we make it first-class.)
-- **`mission_runner`** — Nav2 `BasicNavigator` goal to each bloom centre, then 5 s spin-spray on
-  `/dt/cmd_vel_raw`; `/dt/markers`, `/dt/mission_state`. Mission loop on a worker thread.
+- **`mission_runner`** — Nav2 `BasicNavigator` goal to each bloom centre (projected clear of walls via
+  the static map), then a **3-full-spin** spray on `/dt/cmd_vel_raw`; `/dt/markers`,
+  `/dt/mission_state`. Mission loop on a worker thread.
 - **`operator_gui`** (PyQt5) — map canvas (in-tree `lib/pgm.py`), real+sim pose overlay, live scan
   overlay, bloom markers, click-to-place, Start/Stop/Clear/E-STOP, banners (mode/sync/latency/
   battery/safety/mission). Subscribes `/dt/*` only.
 - Teleop = stock **`turtlebot3_teleop`** remapped `-r /cmd_vel:=/dt/cmd_vel_raw` (no custom teleop).
-- Pure libs (no ROS, unit-tested): `lib/{geometry,safety,blooms,sync,metrics,pgm}.py`.
+- Pure libs (no ROS, unit-tested): `lib/{geometry,safety,blooms,sync,metrics,pgm,hud,occupancy,trajectory}.py`.
 
 ### Modes (`ros2 launch algae_dt bringup.launch.py mode:=...`)
 - `sim_only` (default; the **primary develop/test target** at home): `turtlebot3_gazebo` + Nav2 + our DT layer.
@@ -97,7 +98,7 @@ Nodes:
 - Sim (`/sim/*`): `/sim/scan /sim/odom /sim/cmd_vel /sim/tf /clock` (sim pose taken from `/sim/odom`).
 - Digital (`/dt/*`): `/dt/cmd_vel_raw /dt/real_pose /dt/sim_pose /dt/scan_active /dt/odom_active
   /dt/sync_error /dt/latency_ms /dt/sync_ok(Bool) /dt/alerts(String) /dt/safety(Bool) /dt/mode(String)
-  /dt/health /dt/estop(Bool,latched) /dt/blooms(MarkerArray) /dt/markers /dt/mission_state /dt/mission_cmd`.
+  /dt/health /dt/estop(Bool,latched) /dt/estop_cmd(Bool, GUI→mediator request) /dt/blooms(MarkerArray) /dt/markers /dt/mission_state /dt/mission_cmd`.
 - **Topic-collision rule (course-stated, critical): real and sim must NEVER publish the same topic
   name.** Real = bare, sim = `/sim/*`, sim TF off the global `/tf` in `both`.
 

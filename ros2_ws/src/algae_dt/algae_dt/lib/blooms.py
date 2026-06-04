@@ -8,7 +8,6 @@ BEST_APPROACHES). Tests: test/test_blooms.py.
 """
 from __future__ import annotations
 
-from collections import Counter
 from dataclasses import dataclass, replace
 
 from algae_dt.lib.geometry import euclidean
@@ -70,6 +69,13 @@ def set_pending(field: BloomField, bloom_id: int) -> BloomField:
     return _set_state(field, bloom_id, PENDING)
 
 
+def retry_skipped(field: BloomField) -> BloomField:
+    """Reset SKIPPED blooms to PENDING so a fresh Start retries previously-failed targets; TREATED
+    stays terminal (honest accounting). Returns a new field (immutable). Used by mission restart."""
+    return BloomField(tuple(replace(b, state=PENDING) if b.state == SKIPPED else b
+                            for b in field.blooms))
+
+
 def by_id(field: BloomField, bloom_id: int) -> Bloom | None:
     for b in field.blooms:
         if b.id == bloom_id:
@@ -88,9 +94,3 @@ def nearest_untreated(field: BloomField, x: float, y: float) -> Bloom | None:
         if d < best_d:
             best_d, best = d, b
     return best
-
-
-def counts(field: BloomField) -> dict[str, int]:
-    """State histogram with all four keys always present (for GUI/mission_state)."""
-    c = Counter(b.state for b in field.blooms)
-    return {s: c.get(s, 0) for s in (PENDING, ACTIVE, TREATED, SKIPPED)}

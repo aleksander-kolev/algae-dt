@@ -16,18 +16,18 @@ Concise run scenarios. Setup commands → `docs/SETUP.md`. Each scenario: **step
 
 ## S2 · Safety stop (real, pillar ③)
 - Drive toward a box.
-- **Expected:** forward motion stops at ~0.25 m on `/scan`; `/dt/safety=false`; rotate/back-up still work.
+- **Expected:** forward motion stops at ~0.25 m on `/scan`; `/dt/safety=true (blocked)`; rotate/back-up still work.
 - **If-not:** check `/dt/scan_active` populated; `stop_distance_m`; front-sector convention.
 
 ## S3 · `real_only` autonomous bloom (Nav2 + spray)
-1. `run.sh real_only`; in RViz set **2D Pose Estimate** on the robot's real spot; wait for AMCL lock.
+1. `ros2 launch algae_dt bringup.launch.py mode:=real_only`; in RViz set **2D Pose Estimate** on the robot's real spot; wait for AMCL lock.
 2. GUI → place 1 bloom in open space (≥0.3 m from walls) → **Start**.
-- **Expected:** Nav2 drives to centre (±0.15 m), spins 5 s, bloom→green, mission complete.
+- **Expected:** Nav2 drives to centre (±0.15 m), spins 3 full turns, bloom→green, mission complete.
 - **If-not:** bloom **grey** = unreachable (move from wall) / not localized (redo 2D Pose Estimate
   BEFORE Start) / Nav2 timeout. Half-spray interrupted → stays **pending** (honest).
 
 ## S4 · `both` mode — twin mirror (pillars ①②③)
-- `run.sh both`; real leads, sim mirrors. Place blooms → Start.
+- `./scripts/lab_run.sh` (full `both` demo); real leads, sim mirrors. Place blooms → Start.
 - **Expected:** both robots move 1:1; `/dt/sync_ok` green; obstacle in EITHER world stops BOTH;
   `sync_metrics_*.csv` logs Δxy/latency/stop_skew; sim on `/sim/*` only (no collision).
 - **If-not:** topic collision (sim not namespaced) / domain mismatch / sim cmd_vel type unverified.

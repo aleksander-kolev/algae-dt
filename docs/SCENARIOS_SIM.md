@@ -18,7 +18,7 @@ No robot needed. `sim_only` is the develop/test target AND the guaranteed demo f
 
 ## S3 · Autonomous bloom + spray (pillar ③)
 - GUI → place blooms (open space, ≥0.3 m from walls) → **Start**.
-- **Expected:** Nav2 → centre (±0.15 m) → 5 s spin → bloom **green** → next. Unreachable → **grey**.
+- **Expected:** Nav2 → centre (±0.15 m) → 3 full spins → bloom **green** → next. Unreachable → **grey**.
   Nav-failed/aborted-spray → NOT treated (honest).
 - **Note:** run on a **GPU host** so the LiDAR is 5 Hz; on a GPU-less Docker host the ~2 Hz software
   render throttles Nav2 (the robot navigates but rarely arrives — see `docs/VERIFICATION.md`).

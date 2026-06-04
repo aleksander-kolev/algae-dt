@@ -41,10 +41,13 @@ def _gz_sim(gz_args: str):
         launch_arguments={'gz_args': gz_args, 'on_exit_shutdown': 'true'}.items())
 
 
-def _sim_bringup(pkg, world, headless):
-    """sim_only: stock bare-topic Gazebo robot (model + RSP + bare ros_gz bridge)."""
+def _sim_bringup(pkg, world, headless, gz_gui):
+    """sim_only: stock bare-topic Gazebo robot (model + RSP + bare ros_gz bridge).
+    gz_gui=False runs the server only (it still GPU-renders the sensors via the display context) and
+    skips the heavy gz 3D client — useful where that client can't init (e.g. OGRE2 on the WSL d3d12 GL,
+    which refuses its large VBO); drive/visualise via operator_gui + RViz instead."""
     actions = [_gz_sim('-r -s -v2 ' + ('--headless-rendering ' if headless else '') + world)]
-    if not headless:
+    if not headless and gz_gui:
         actions.append(_gz_sim('-g -v2 '))
     actions.append(IncludeLaunchDescription(
         PythonLaunchDescriptionSource(_src('turtlebot3_gazebo', 'launch', 'robot_state_publisher.launch.py')),
@@ -86,6 +89,7 @@ def launch_setup(context, *args, **kwargs):
     headless = LaunchConfiguration('headless').perform(context).lower() == 'true'
     use_rviz = LaunchConfiguration('use_rviz').perform(context).lower() == 'true'
     use_fake_robot = LaunchConfiguration('use_fake_robot').perform(context).lower() == 'true'
+    gz_gui = LaunchConfiguration('gz_gui').perform(context).lower() == 'true'
 
     use_sim_time = (mode == 'sim_only')
     use_sim_time_str = 'true' if use_sim_time else 'false'
@@ -98,7 +102,7 @@ def launch_setup(context, *args, **kwargs):
     ]
 
     if mode == 'sim_only':
-        actions += _sim_bringup(pkg, world, headless)
+        actions += _sim_bringup(pkg, world, headless, gz_gui)
     elif mode == 'both':
         actions += _sim_mirror(pkg, world, headless)
 
@@ -114,6 +118,16 @@ def launch_setup(context, *args, **kwargs):
     }
     if mode == 'sim_only':
         rewrites['set_initial_pose'] = 'True'        # headless auto-seed at the spawn (no human 2D pose)
+        # The GPU-less / WSL software render gives ~2.5-3.5 Hz LiDAR; the stock collision_monitor
+        # scan source_timeout (0.2 s) then rejects every scan ("invalid source") and halts autonomy.
+        # Loosen it to 2.0 s for SIM ONLY so the demo navigates; real_only/both keep the stock 0.2 s.
+        rewrites['source_timeout'] = '2.0'
+        # Same throttle makes the controller sluggish, so the default progress checker (move 0.5 m
+        # within 10 s) aborts ("Failed to make progress") before the robot settles into the goal ->
+        # blooms skipped, never sprayed. Loosen it for SIM ONLY (real_only/both keep stock); our own
+        # nav_goal_timeout_s still bounds a truly stuck goal.
+        rewrites['movement_time_allowance'] = '30.0'
+        rewrites['required_movement_radius'] = '0.1'
     nav2_params = RewrittenYaml(
         source_file=_src('turtlebot3_navigation2', 'param', 'burger.yaml'),
         param_rewrites=rewrites, convert_types=True)
@@ -147,5 +161,7 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('use_rviz', default_value='false'),
         DeclareLaunchArgument('use_fake_robot', default_value='false',
                               description='real_only/both: spawn the kinematic fake_robot (no hardware)'),
+        DeclareLaunchArgument('gz_gui', default_value='true',
+                              description='sim_only: run the gz 3D client (false = server-only GPU sensors, no 3D window)'),
         OpaqueFunction(function=launch_setup),
     ])

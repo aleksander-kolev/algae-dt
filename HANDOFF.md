@@ -19,11 +19,11 @@ The three criteria → our deliverables:
   + navigate-and-spray; **introduce a live environment change** in the demo.
 
 ## State: DONE — Phases 1→6 implemented, TDD, and integration-verified (see `docs/VERIFICATION.md`)
-**DONE:** 8 pure libs (safety/blooms/sync/metrics/geometry/pgm/hud/trajectory) + 4 nodes
+**DONE:** 9 pure libs (safety/blooms/sync/metrics/geometry/pgm/hud/trajectory/occupancy) + 4 nodes
 (twin_mediator, sync_supervisor, mission_runner, operator_gui) + `fake_robot` + `dynamic_obstacle`;
 full `bringup.launch.py` (sim_only | real_only | both, with `headless`/`use_rviz`/`use_fake_robot`);
 `/sim/*` bridge for `both`; reproducible **`algae-dt:dev`** Docker image (`docker/`, `docs/DOCKER.md`).
-**103 tests pass** + clean `colcon build`. The five old open items are RESOLVED & verified in-container:
+**145 tests pass** + clean `colcon build`. The five old open items are RESOLVED & verified in-container:
 (1) `mode:=sim_only` smoke-tested (Nav2 active + AMCL localized, `/scan` flows) — `docker/sim_smoke.sh`;
 (2) gz↔ROS bridge confirmed (the stock spawn bundles `parameter_bridge`; `/scan /odom /cmd_vel /clock`
 reach ROS); (3) `both` `/sim/*` namespacing done (custom bridge + namespaced RSP, collision-free);
@@ -31,12 +31,15 @@ reach ROS); (3) `both` `/sim/*` namespacing done (custom bridge + namespaced RSP
 `burger.yaml`; (5) the cmd_vel chokepoint is TwistStamped end-to-end.
 
 **REMAINING (environment/process — not code):**
-- Full **navigate-and-spray COMPLETION is throttled on a GPU-less Docker host** (~2 Hz software-render
-  LiDAR → Nav2 `collision_monitor` rejects stale scans). The robot navigates via the full chain
-  (proven); run the full demo on a **GPU host / the lab laptop** (5 Hz scan). Completion logic is
-  unit-proven (`test_mission_runner.py`). Details: `docs/VERIFICATION.md` + BEST_APPROACHES §Lessons.
+- **navigate-and-spray now COMPLETES in throttled sim_only** (verified live on WSLg: `idle →
+  navigating:0 → spraying:0 → complete`, measured ~3.00 full revolutions (closed-loop from
+  `/dt/odom_active`)). The launch loosens the
+  sim_only `collision_monitor.source_timeout` AND the controller progress checker so the ~3.5 Hz
+  software-render LiDAR no longer aborts nav ("Failed to make progress"); the spray is closed-loop on
+  odom (3 full turns guaranteed); near-wall goals are projected clear of the inflation zone. Still
+  prefer a **GPU host / the lab laptop** (5 Hz scan) for a crisp demo. Details: BEST_APPROACHES §Lessons.
 - **Record the Week-9 demo video** (`docs/DEMO_SCRIPT.md`) on a GPU host, and **validate on lab
-  hardware** (`real_only`/`both` on the Burger; `scripts/lab_run.sh`, `docs/RUN_ON_LAB_PC.md`).
+  hardware** (`both` on the Burger via `scripts/lab_run.sh` (or `real_only` via a manual `ros2 launch`); `docs/RUN_ON_LAB_PC.md`).
 
 > ⚠️ **Shared branch:** this branch (`feat/poc-implementation`) also received `feat(lab)` commits
 > (lab_run.sh / RUN_ON_LAB_PC.md) from a parallel effort. If two sessions edit at once, coordinate to
@@ -46,11 +49,11 @@ reach ROS); (3) `both` `/sim/*` namespacing done (custom bridge + namespaced RSP
 1. **GPU host:** `bash docker/run.sh` → inside, `ros2 launch algae_dt bringup.launch.py mode:=sim_only`
    (display). Drive the GUI, place blooms, Start; record the baseline video per `docs/DEMO_SCRIPT.md`.
    Hardware-free `both`: `mode:=both use_fake_robot:=true`.
-2. **Lab:** connect to the Burger (SETUP §3), then `mode:=real_only` / `mode:=both`
-   (`scripts/lab_run.sh`, `docs/RUN_ON_LAB_PC.md`). Validate the 25 cm stop on real `/scan`, AMCL
+2. **Lab:** connect to the Burger (SETUP §3), then `mode:=both` via `scripts/lab_run.sh` (or
+   `mode:=real_only` via a manual `ros2 launch`) (`docs/RUN_ON_LAB_PC.md`). Validate the 25 cm stop on real `/scan`, AMCL
    2D-Pose-Estimate, one bloom navigate+spray, the `both` mirror.
 3. **Verify anytime:** `docker run --rm -v "$PWD/ros2_ws:/ws" -v "$PWD/docker:/ci" algae-dt:dev bash
-   /ci/ci.sh` (103 tests + build). Evidence map: `docs/VERIFICATION.md`.
+   /ci/ci.sh` (145 tests + build). Evidence map: `docs/VERIFICATION.md`.
 
 > Re-implementing? The TDD recipe still holds: failing test (pure libs) → minimal impl → `colcon
 > build --packages-select algae_dt` → `pytest src/algae_dt/test` → run in `sim_only` → commit.
@@ -69,7 +72,7 @@ reach ROS); (3) `both` `/sim/*` namespacing done (custom bridge + namespaced RSP
 - Don't hand-build SDF/URDF/`robot_state_publisher`/teleop/Nav2 params — use stock packages (D2).
 - Don't make the bus plain Twist (D3). Don't split into 2 packages (D4). Don't put `name=` on
   `mission_runner`'s launch Node (process-wide remap trap). Don't remap cmd_vel on `mission_runner`
-  (it publishes none — remap Nav2 via SetRemap in the launch).
+  (it publishes none — route Nav2 via the `collision_monitor.cmd_vel_out_topic` RewrittenYaml rewrite).
 
 ## Definition of done (per task) + verify
 Failing test → minimal impl → `colcon build --packages-select algae_dt` clean → `pytest src/algae_dt/test`
@@ -94,7 +97,7 @@ green build + a run.** Build/test recipe: `docs/SETUP.md` §1 (container) or §2
 
 ## Environment quick ref
 Everything runs in the course `turtlebot3_ws` Docker container (turtlebot3 is in the image, NOT the
-bare host — D1). **One command, from a fresh clone:** `./scripts/lab_run.sh sim_only` (home) or
-`ROS_DOMAIN_ID=<robot#> ./scripts/lab_run.sh real_only` (lab) — it recreates `~/turtlebot3_ws`, copies
+bare host — D1). **One command, from a fresh clone:** `./scripts/lab_run.sh --sim` (hardware-free sim demo at home) or
+`ROS_DOMAIN_ID=<robot#> ./scripts/lab_run.sh` (lab; full `both` real+sim demo) — it recreates `~/turtlebot3_ws`, copies
 the package, builds, and launches. Full flow + provenance: `docs/RUN_ON_LAB_PC.md`. Robot: Wi-Fi
 `AP2IRR10`, `ssh turtlebot@<ip>` → `turtlebot3_bringup robot.launch.py`.
