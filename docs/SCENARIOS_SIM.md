@@ -13,7 +13,7 @@ No robot needed. `sim_only` is the develop/test target AND the guaranteed demo f
 - **If-not:** `pkill -9 -f "gz sim"` and relaunch; check `ros2 pkg list | grep turtlebot3`.
 
 ## S2 · Teleop (command bus)
-- `ros2 run turtlebot3_teleop teleop_keyboard -r /cmd_vel:=/dt/cmd_vel_raw`; drive.
+- `ros2 run turtlebot3_teleop teleop_keyboard --ros-args -r /cmd_vel:=/dt/cmd_vel_raw`; drive.
 - **Expected:** sim robot moves; obstacle <0.25 m on `/scan` → forward zeroed (`/dt/safety` True), turn OK.
 
 ## S3 · Autonomous bloom + spray (pillar ③)

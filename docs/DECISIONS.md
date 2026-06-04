@@ -11,11 +11,15 @@ course's recommended environment.
 replacement, teleop, and Nav2 params." We verified **5 ways** on the bare native account
 `team36@2IRR10-NB26` that turtlebot3 was absent THERE (`dpkg -l | grep ros-jazzy-turtlebot3`,
 `ros2 pkg list | grep turtlebot3`, `ls ~/turtlebot3_ws/{src,install}/turtlebot3*` — all empty). BUT
-the course material shows the **intended environment is WSL+Docker running the provided
-`turtlebot3_ws` image (which SHIPS the turtlebot3 stack)** or the native lab laptop provisioned with
-it. The turtlebot3 build log we'd once seen was the **robot's Raspberry Pi** (`turtlebot@ubuntu`), a
-different machine — not the lab PC. So turtlebot3 IS available via the intended path; the old
-"absent" finding was true only for the bare native account, which was never the target.
+the course material shows the **intended environment ships the turtlebot3 stack**: WSL+Docker with
+the provided `turtlebot3_ws` image at home, and the lab laptop with the stack **built from source
+in `~/turtlebot3_ws`**. The turtlebot3 build log we'd once seen was the **robot's Raspberry Pi**
+(`turtlebot@ubuntu`), a different machine — not the lab PC. *(Historical correction, 2026-06: at
+the time we concluded the bare native account "was never the target" — wrong. That account IS the
+lab target; it was merely not yet provisioned with the from-source workspace when we checked. The
+"absent" finding was about provisioning state, not about Docker-vs-native.)* Either way the
+conclusion stands: turtlebot3 IS available via the intended path, and "hand-build everything"
+was the wrong response to an unprovisioned account.
 **Status:** settled — and the open check is now CONFIRMED (lab session, 2026-06): the lab PC has
 **NO Docker**; the turtlebot3 stack is present natively, **built from source in
 `~/turtlebot3_ws/src`** (`turtlebot3`, `turtlebot3_msgs`, `DynamixelSDK`, `turtlebot3_simulations`).

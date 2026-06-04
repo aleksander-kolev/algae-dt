@@ -13,18 +13,34 @@ the laptop; nothing below needs it.
 does **only `both`** (full real+sim demo) by default and **errors** rather than start a half-demo;
 `--sim` is the hardware-free fallback (a valid graded demo).
 
-## 0. Workspace sanity (first thing, every session — 10 s)
+## 0. Every session, FIRST (the laptop can be factory-reset without notice)
 ```bash
+# 1) clone the repo — every command below lives inside it:
+git clone https://github.com/aleksander-kolev/algae-dt.git && cd algae-dt
+
+# 2) stage the workspace fail-safe ZIP into ~/Downloads (from the team OneDrive / the USB stick).
+#    It is the recovery source if ~/turtlebot3_ws is broken or gone — on a wiped laptop it is the
+#    ONLY way back, so stage it BEFORE you need it.
+
+# 3) sanity-check the workspace + every runtime dep (~10 s; lab_run.sh re-checks this itself):
 source /opt/ros/jazzy/setup.bash && source ~/turtlebot3_ws/install/setup.bash
-ros2 pkg list | grep -E 'turtlebot3|nav2_simple_commander'
+for p in turtlebot3_gazebo turtlebot3_bringup turtlebot3_navigation2 turtlebot3_teleop \
+         nav2_bringup nav2_common nav2_simple_commander ros_gz_sim ros_gz_bridge rviz2; do
+  ros2 pkg prefix "$p" >/dev/null 2>&1 || echo "MISSING: $p"
+done; python3 -c 'import PyQt5' 2>/dev/null || echo 'MISSING: PyQt5'
 ```
-Expect `turtlebot3_gazebo/_bringup/_navigation2/_teleop` + `nav2_simple_commander`. If that fails —
-or a build errors with a foreign path (`CMakeCache.txt directory … /home/test/turtlebot3_ws`),
+Remedies for a `MISSING:` line — `turtlebot3_*` → recover the workspace (next). `nav2_*` /
+`ros_gz_*` / `rviz2` → system packages (`ros-jazzy-nav2-bringup`, `ros-jazzy-ros-gz`,
+`ros-jazzy-rviz2`): no sudo on the laptop, **flag to a TA** (RULES §A-3). `PyQt5` →
+`pip install --user PyQt5` (no sudo needed).
+
+### Broken/copied workspace? Recover it (no sudo, no Docker)
+If a build errors with a foreign path (`CMakeCache.txt directory … /home/test/turtlebot3_ws`),
 `PermissionError: [Errno 13]` on `install/**/local_setup.dsv`, or the tree sits at
 `~/turtlebot3_ws (Copy)` — the workspace was copied from another machine/user and is unsalvageable
-in place. **Recover it (no sudo, no Docker; the fail-safe zip lives in `~/Downloads`):**
+in place:
 ```bash
-./scripts/lab_fix_workspace.sh
+./scripts/lab_fix_workspace.sh        # uses the fail-safe zip staged in ~/Downloads (step 2)
 ```
 It extracts ONLY `src/` from the zip (`build/install` are machine-specific poison), renames every
 `~/turtlebot3_ws*` dir to `turtlebot3_ws.broken.<ts>` (your local experiments are KEPT; rename
@@ -35,11 +51,13 @@ and verifies the packages resolve. **Then open a NEW terminal** (old ones carry 
 Options: `--zip PATH` · `--from-dir DIR` · `--domain N` · `--no-bashrc` · `--no-build` ·
 `--keep-zip-algae` · `--purge-quarantine`. Run from a cloned algae-dt repo it also refreshes
 `src/algae_dt` to the repo's copy. Tested end-to-end by `scripts/test_lab_fix_workspace.sh`.
+**No zip staged but the broken tree is still on disk?**
+`./scripts/lab_fix_workspace.sh --from-dir ~/turtlebot3_ws` salvages `src/` from it (works when
+that `src/` is still readable; foreign-owned unreadable files → you need the zip).
 
 ## Start the demo — the script way (normal)
 ```bash
-# 1) on the lab laptop: clone (once)
-git clone https://github.com/aleksander-kolev/algae-dt.git && cd algae-dt
+# 1) repo cloned + workspace sane (§0 above)
 
 # 2) on the ROBOT Pi (separate ssh — the script can't do this):
 ssh turtlebot@192.168.8.36
@@ -88,13 +106,24 @@ the arena, so the real start never matches the origin — you must tell AMCL the
    → the robot drives wrong or skips goals.
 
 ## Prerequisites (the script errors clearly if any fail)
-- **A healthy native workspace** — `turtlebot3_gazebo` resolvable from `/opt/ros/jazzy` +
-  `~/turtlebot3_ws/install` (§0; broken → `./scripts/lab_fix_workspace.sh`).
+- **A healthy native workspace + runtime deps** — the §0 checklist: `turtlebot3_*` from
+  `~/turtlebot3_ws/install`, `nav2_bringup`/`nav2_common`/`nav2_simple_commander`,
+  `ros_gz_sim`/`ros_gz_bridge`, `rviz2`, `PyQt5` (lab_run.sh preflights all of these and prints
+  the remedy per missing item; broken ws → `./scripts/lab_fix_workspace.sh`).
 - **Robot reachable + publishing `/scan`** (laptop + robot on Wi-Fi `AP2IRR10`, same
   `ROS_DOMAIN_ID=36` — the robot number on the sticker, set on BOTH sides).
 - Overrides: `ROS_DOMAIN_ID=` / `ROBOT_IP=`. Hardware-free at home:
   `ros2 launch algae_dt bringup.launch.py mode:=both use_fake_robot:=true`. Shut the robot down with
   `ssh turtlebot@192.168.8.36 'sudo shutdown now'` before the power switch.
+
+## Before you leave (every session — the laptop can be wiped without notice)
+1. Commit + push anything you changed: `git add -A && git commit -m "lab session" && git push`
+   (no network? copy the repo + workspace changes to the **USB stick**).
+2. Copy evidence off the machine: the sync supervisor's `sync_metrics_*.csv` (path printed in its
+   console log), screenshots/recordings → USB / OneDrive.
+3. If `~/turtlebot3_ws` changed in a way worth keeping, refresh the **fail-safe zip** in
+   OneDrive/USB (zip the workspace, or at minimum its `src/`) — it is the §0 recovery source.
+4. Robot already shut down (`sudo shutdown now` on the Pi, then the switch).
 
 > Sources: the sourcing/build/launch commands are verbatim from the Canvas pages ("How to run
 > Gazebo", "Changing Robot Inflation", "DT Example", "Connecting lab laptop to robot");

@@ -70,16 +70,21 @@ ROS 2 Jazzy lives at `/opt/ros/jazzy` and the turtlebot3 stack is **built from s
 `both` demo) or `./scripts/lab_run.sh --sim` (hardware-free fallback) — it auto-detects the
 runtime and on the lab PC lands on native (`--native` forces). See `docs/RUN_ON_LAB_PC.md`.
 
-**First thing, every session — verify the workspace (10 s):**
+**First thing, every session — verify the workspace + every runtime dep (10 s):**
 ```bash
 source /opt/ros/jazzy/setup.bash && source ~/turtlebot3_ws/install/setup.bash
-ros2 pkg list | grep turtlebot3        # expect turtlebot3_gazebo, _bringup, _navigation2, _teleop
-ros2 pkg list | grep nav2_simple_commander   # mission_runner's BasicNavigator import depends on it
+for p in turtlebot3_gazebo turtlebot3_bringup turtlebot3_navigation2 turtlebot3_teleop \
+         nav2_bringup nav2_common nav2_simple_commander ros_gz_sim ros_gz_bridge rviz2; do
+  ros2 pkg prefix "$p" >/dev/null 2>&1 || echo "MISSING: $p"
+done; python3 -c 'import PyQt5' 2>/dev/null || echo 'MISSING: PyQt5'
 ```
-If `nav2_simple_commander` is missing (rare), it's the one runtime dep to flag to a TA per the
-no-sudo process (RULES §A-3). Run the same two `ros2 pkg list` checks at home in the container.
-If the turtlebot3 packages don't resolve, the workspace is broken — recover it with
-`./scripts/lab_fix_workspace.sh` (below), don't hand-patch it.
+The launch needs ALL of these: `turtlebot3_*` come from the from-source workspace (missing → the
+ws is broken, recover with `./scripts/lab_fix_workspace.sh` below — don't hand-patch); the Nav2 /
+`ros_gz` / `rviz2` ones are SYSTEM packages from `/opt/ros/jazzy` (`ros-jazzy-nav2-bringup`,
+`ros-jazzy-ros-gz`, `ros-jazzy-rviz2`) — a src-only workspace zip never carries them, and no sudo
+means a missing one goes **to a TA** (RULES §A-3). `PyQt5` missing natively →
+`pip install --user PyQt5` (no sudo), same as the container note in §1. Run the same checks at
+home in the container. `lab_run.sh` runs this exact preflight itself and prints the per-item remedy.
 
 Get the package onto the laptop (course "How to create Packages.pdf", **Section 3 = copy full package**):
 ```bash

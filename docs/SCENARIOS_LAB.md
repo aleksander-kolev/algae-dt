@@ -4,13 +4,14 @@ Concise run scenarios. Setup commands → `docs/SETUP.md`. Each scenario: **step
 
 ## S0 · Pre-flight (every session, ~5 min)
 1. Lab laptop + robot on Wi-Fi `AP2IRR10`; `export ROS_DOMAIN_ID=<robot#>` everywhere.
-2. `ros2 pkg list | grep -E "turtlebot3|nav2_simple_commander"` → all present.
+2. The §0 dep checklist from `docs/RUN_ON_LAB_PC.md` → no `MISSING:` lines (`turtlebot3_*`,
+   `nav2_bringup/_common/_simple_commander`, `ros_gz_sim/_bridge`, `rviz2`, `PyQt5`).
 3. `ssh turtlebot@<ip>` → `ros2 launch turtlebot3_bringup robot.launch.py`.
 4. On laptop: `ros2 topic hz /scan` (~5 Hz), `ros2 topic type /cmd_vel` → `TwistStamped`.
 - **Expected:** topics flow. **If-not:** wrong domain/Wi-Fi, or robot Pi not up — fix before launching.
 
 ## S1 · Teleop through the mediator (real)
-- Run mediator + `turtlebot3_teleop` remapped `-r /cmd_vel:=/dt/cmd_vel_raw`; drive.
+- Run mediator + teleop: `ros2 run turtlebot3_teleop teleop_keyboard --ros-args -r /cmd_vel:=/dt/cmd_vel_raw`; drive.
 - **Expected:** robot moves; `/cmd_vel` is `TwistStamped`; obstacle <0.25 m → forward zeroed, turn OK.
 - **If-not:** see S-EDGE-A (no motion).
 
