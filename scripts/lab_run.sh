@@ -188,11 +188,20 @@ PAYLOAD='
   source /opt/ros/jazzy/setup.bash
   [ -f /opt/turtlebot3_ws/install/setup.bash ] && source /opt/turtlebot3_ws/install/setup.bash || true
   [ -f "$DT_WS/install/setup.bash" ] && source "$DT_WS/install/setup.bash" || true
-  if ! ros2 pkg prefix turtlebot3_gazebo >/dev/null 2>&1; then
-    echo "FATAL: turtlebot3 stack not resolvable (checked /opt/ros/jazzy, /opt/turtlebot3_ws/install,"
-    echo "       $DT_WS/install). Container: this image lacks the stock turtlebot3 packages."
-    echo "       Native: rebuild the workspace first:  ./scripts/lab_fix_workspace.sh"; exit 4
+  missing=""
+  for p in turtlebot3_gazebo nav2_bringup nav2_common nav2_simple_commander ros_gz_sim ros_gz_bridge rviz2; do
+    ros2 pkg prefix "$p" >/dev/null 2>&1 || missing="$missing $p"
+  done
+  python3 -c "import PyQt5" >/dev/null 2>&1 || missing="$missing PyQt5"
+  if [ -n "$missing" ]; then
+    echo "FATAL: required packages not resolvable:$missing"
+    echo "       (checked /opt/ros/jazzy, /opt/turtlebot3_ws/install, $DT_WS/install)"
+    echo "       turtlebot3_*          -> rebuild the workspace:  ./scripts/lab_fix_workspace.sh"
+    echo "       nav2_* / ros_gz_* / rviz2 -> system packages (ros-jazzy-nav2-bringup, ros-jazzy-ros-gz,"
+    echo "                                ros-jazzy-rviz2). No sudo on the lab PC -> flag to a TA (RULES A-3)."
+    echo "       PyQt5                 -> pip install --user PyQt5   (no sudo needed)"; exit 4
   fi
+  echo "-- preflight OK: turtlebot3 + Nav2 + ros_gz + rviz2 + PyQt5 all resolvable --"
   cd "$DT_WS"
   if [ "$DT_MODE" = both ]; then
     echo "-- verifying the real-robot link: waiting up to 40s for /scan --"
@@ -220,7 +229,9 @@ if [ "$RUNTIME" = native ]; then
   log INFO "launching mode:=$MODE NATIVELY (Ctrl-C to stop)"
   echo "   teleop in another terminal:  bash -lc 'source /opt/ros/jazzy/setup.bash; source ~/turtlebot3_ws/install/setup.bash; export ROS_DOMAIN_ID=$DOMAIN; ros2 run turtlebot3_teleop teleop_keyboard --ros-args -r /cmd_vel:=/dt/cmd_vel_raw'" >&2
   echo >&2
-  exec env TURTLEBOT3_MODEL=burger LDS_MODEL=LDS-02 ROS_DOMAIN_ID="$DOMAIN" \
+  # ROS_LOCALHOST_ONLY=0: a leftover =1 in the operator's shell would confine DDS to loopback and
+  # make the robot's /scan invisible with a misleading diagnosis — neutralize it explicitly.
+  exec env TURTLEBOT3_MODEL=burger LDS_MODEL=LDS-02 ROS_DOMAIN_ID="$DOMAIN" ROS_LOCALHOST_ONLY=0 \
        DT_WS="$WS" DT_MODE="$MODE" DT_LAUNCH_ARGS="$LAUNCH_ARGS" LAB_RUN_DRY="${LAB_RUN_DRY:-}" \
        bash -c "$PAYLOAD"
 fi
@@ -246,6 +257,6 @@ echo >&2
 exec docker run --rm -it --name "$CONTAINER" --net=host \
   "${X11_ARGS[@]}" \
   -v "$WS:/ws" -w /ws -e HOME=/ws \
-  -e TURTLEBOT3_MODEL=burger -e ROS_DOMAIN_ID="$DOMAIN" \
+  -e TURTLEBOT3_MODEL=burger -e ROS_DOMAIN_ID="$DOMAIN" -e ROS_LOCALHOST_ONLY=0 \
   -e DT_WS=/ws -e DT_MODE="$MODE" -e DT_LAUNCH_ARGS="$LAUNCH_ARGS" -e LAB_RUN_DRY="${LAB_RUN_DRY:-}" \
   --user "$(id -u):$(id -g)" "$IMAGE" bash -lc "$PAYLOAD"

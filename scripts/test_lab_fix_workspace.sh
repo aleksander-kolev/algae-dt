@@ -203,6 +203,21 @@ check "T1 bashrc: backup created"                      bash -c "ls '$H1'/.bashrc
 check "T1 a NEW login shell resolves the packages"     runuser -u tester -- env HOME="$H1" bash -c 'source $HOME/.bashrc >/dev/null 2>&1; ros2 pkg prefix turtlebot3_msgs >/dev/null && ros2 pkg prefix algae_dt >/dev/null'
 check "T1 verify messages in output"                   bash -c "grep -q 'verified: turtlebot3_msgs' '$T/t1.log'"
 
+# ============================================================================ T1b: zip root == "turtlebot3_ws"
+# The fail-safe zip's internal root name is arbitrary — including EXACTLY "turtlebot3_ws", where the
+# extraction prefix equals the quarantine-glob basename AND the bashrc-repair guard for the
+# quarantined name "turtlebot3_ws" must not disable the NEW workspace's source line.
+section "T1b: zip internal root named EXACTLY turtlebot3_ws"
+H1B="$T/home1b"; make_broken_home "$H1B" "turtlebot3_ws"
+if run_fix "$H1B" "$T/t1b.log" --no-build; then ok "T1b script exit 0"; else bad "T1b script exit 0"; sed 's/^/    | /' "$T/t1b.log" | tail -30; fi
+check "T1b pkg extracted into fresh ws"                test -f "$H1B/turtlebot3_ws/src/turtlebot3_msgs/package.xml"
+check "T1b '(Copy)' dir quarantined"                   bash -c "! test -e '$H1B/turtlebot3_ws (Copy)'"
+Q1B=$(ls -d "$H1B"/turtlebot3_ws.broken.* 2>/dev/null | wc -l)
+[ "$Q1B" = 2 ] && ok "T1b exactly 2 dirs quarantined" || bad "T1b exactly 2 dirs quarantined (got $Q1B)"
+check "T1b local mods preserved in quarantine"         bash -c "cat \"\$(ls -d '$H1B'/turtlebot3_ws.broken.*/src/LOCAL_MODS 2>/dev/null | head -1)\" | grep -q 'random modifications'"
+check "T1b managed bashrc block present once"          bash -c "[ \"\$(grep -c '^# >>> algae-dt lab_fix_workspace >>>$' '$H1B/.bashrc')\" = 1 ]"
+check "T1b NEW ws source line NOT commented out"       bash -c "grep -qF '[ -f \"$H1B/turtlebot3_ws/install/setup.bash\" ]' '$H1B/.bashrc' && ! grep -q 'disabled by lab_fix_workspace.*$H1B/turtlebot3_ws/install' '$H1B/.bashrc'"
+
 # ============================================================================ T2: idempotent re-run
 section "T2: second run on the same home (idempotency)"
 sleep 1   # distinct quarantine/backup timestamps
