@@ -215,3 +215,91 @@ def test_scan_overlay_anchors_to_the_active_robots_pose():
         win._repaint.stop()
         bridge.destroy_node()
         rclpy.shutdown()
+
+
+def test_bridge_battery_guard_ignores_invalid_frames():
+    """The real OpenCR emits voltage=0.0 / present=False frames at bringup or on a serial hiccup —
+    one such frame used to paint a phantom '0.00 V' critical on a healthy pack. Invalid frames
+    (non-finite or <= 0 V) must be ignored, and a later glitch must keep the last GOOD value."""
+    import math
+    rclpy.init()
+    bridge = GuiBridge()
+    pub = rclpy.create_node('gui_batt_pub')
+    p = pub.create_publisher(BatteryState, '/dt/health', 10)
+    ex = SingleThreadedExecutor()
+    ex.add_node(bridge)
+    ex.add_node(pub)
+    try:
+        p.publish(BatteryState(voltage=0.0))             # bringup glitch frame
+        p.publish(BatteryState(voltage=float('nan')))    # serial garbage
+        _spin_until(ex, lambda: False, secs=0.4)
+        assert math.isnan(bridge.battery_v), "invalid frames must not land on the banner"
+        assert bridge.age_s('battery') == float('inf'), "invalid frames must not count as live data"
+
+        p.publish(BatteryState(voltage=11.5))
+        assert _spin_until(ex, lambda: abs(bridge.battery_v - 11.5) < 1e-6)
+        assert bridge.age_s('battery') < 5.0
+
+        p.publish(BatteryState(voltage=0.0))             # later glitch: keep the last good value
+        _spin_until(ex, lambda: False, secs=0.4)
+        assert abs(bridge.battery_v - 11.5) < 1e-6
+    finally:
+        ex.shutdown()
+        bridge.destroy_node()
+        pub.destroy_node()
+        rclpy.shutdown()
+
+
+def test_bridge_link_liveness_tracks_dt_safety():
+    """/dt/safety is the mediator heartbeat (republished every command tick): never seen -> the
+    link reads STALE; a fresh message makes it live; silence flips it back. The old console kept
+    every banner at its last (green) value when the mediator died — a frozen console must read
+    as frozen."""
+    from rclpy.parameter import Parameter
+    rclpy.init()
+    bridge = GuiBridge(parameter_overrides=[
+        Parameter('gui_stale_after_s', Parameter.Type.DOUBLE, 0.3)])
+    pub = rclpy.create_node('gui_live_pub')
+    p_safety = pub.create_publisher(Bool, '/dt/safety', _latched())
+    ex = SingleThreadedExecutor()
+    ex.add_node(bridge)
+    ex.add_node(pub)
+    try:
+        assert bridge.link_stale(), "no /dt/safety yet -> the link must read STALE, not healthy"
+        p_safety.publish(Bool(data=False))
+        assert _spin_until(ex, lambda: not bridge.link_stale()), "heartbeat arrives -> link live"
+        time.sleep(0.5)                                   # exceed the 0.3 s budget, no traffic
+        assert bridge.link_stale(), "a silent mediator must flip the link back to STALE"
+    finally:
+        ex.shutdown()
+        bridge.destroy_node()
+        pub.destroy_node()
+        rclpy.shutdown()
+
+
+def test_refresh_paints_unknown_banners_when_link_lost():
+    """With the DT link stale, the SAFETY/E-STOP banners must read UNKNOWN — DT LINK LOST instead
+    of the last (green) values; once the heartbeat arrives they return to the real state."""
+    from PyQt5 import QtWidgets
+    from rclpy.parameter import Parameter
+    rclpy.init()
+    bridge = GuiBridge(parameter_overrides=[
+        Parameter('gui_stale_after_s', Parameter.Type.DOUBLE, 0.3)])
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    win = operator_gui._make_window(bridge)
+    try:
+        win._spin.stop()
+        win._repaint.stop()                               # drive _refresh by hand
+        win._refresh()
+        assert 'UNKNOWN' in win.banners['safety'].text(), "stale link -> SAFETY must read UNKNOWN"
+        assert 'UNKNOWN' in win.banners['estop'].text(), "stale link -> E-STOP must read UNKNOWN"
+        assert 'DT LINK LOST' in win.banners['mode'].text()
+
+        bridge._on_safety(Bool(data=True))                # heartbeat arrives, gate blocked
+        win._refresh()
+        assert win.banners['safety'].text() == 'SAFETY: BLOCKED', "live link -> real gate state"
+        assert win.banners['estop'].text() == 'E-STOP: clear'
+        assert 'DT LINK LOST' not in win.banners['mode'].text()
+    finally:
+        bridge.destroy_node()
+        rclpy.shutdown()

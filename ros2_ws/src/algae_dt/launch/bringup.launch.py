@@ -123,6 +123,14 @@ def launch_setup(context, *args, **kwargs):
     use_rviz_cfg = LaunchConfiguration('use_rviz').perform(context).lower()
     use_rviz = (use_rviz_cfg == 'true'
                 or (use_rviz_cfg == 'auto' and mode in ('real_only', 'both') and not headless))
+    if mode in ('real_only', 'both') and not use_rviz:
+        # headless:=true (or use_rviz:=false) in a REAL mode removes the stack's ONLY /initialpose
+        # source: AMCL stays seeded at the map origin and every Nav2 goal plans from a wrong pose.
+        # Allowed (an operator may publish /initialpose by hand) but it must never be silent.
+        print(f"[bringup.launch] WARNING: mode:={mode} without RViz — AMCL has NO initial-pose "
+              "source (sim_only auto-seeds; real modes are seeded by RViz '2D Pose Estimate'). "
+              "Publish /initialpose manually or relaunch with use_rviz:=true, else the robot is "
+              "PERMANENTLY MISLOCALIZED at the map origin.", flush=True)
 
     use_sim_time = (mode == 'sim_only')
     use_sim_time_str = 'true' if use_sim_time else 'false'

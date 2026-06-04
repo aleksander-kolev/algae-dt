@@ -47,6 +47,7 @@ class GuiBridge(Node):
         self.range_min = gp('scan_range_min_m', 0.12)
         self.range_max = gp('scan_range_max_m', 3.5)
         self.latency_budget_ms = gp('latency_budget_ms', 250.0)
+        self.stale_after_s = gp('gui_stale_after_s', 2.0)
 
         # latest state for the canvas/banners
         self.real_pose = None
@@ -63,6 +64,13 @@ class GuiBridge(Node):
         self.estop = False
         self.last_alert = ''
         self.last_alert_t = float('-inf')   # time.monotonic() of the last /dt/alerts message
+        # Arrival clock per CONTINUOUS stream (time.monotonic). /dt/safety doubles as the
+        # mediator's heartbeat — it is republished every command tick — so its age is the DT-link
+        # liveness. Latched change-driven topics (/dt/estop, /dt/mode, /dt/mission_state, ...) are
+        # deliberately NOT aged: silence there is normal; their TRUST is gated on link_stale().
+        # Without this, a dead mediator / dropped Wi-Fi froze every banner at its last value, all
+        # green — the console looked healthy while the safety gate was no longer running.
+        self.last_seen: dict[str, float] = {}
 
         self._next_id = 0
         self._blooms: list[tuple[int, float, float]] = []
@@ -86,18 +94,40 @@ class GuiBridge(Node):
         self.create_subscription(String, '/dt/alerts', self._on_alert, 10)
 
     # ---- inbound /dt/* state (named handlers so the mapping is unit-testable, F17) ----
-    def _on_real_pose(self, m): self.real_pose = _xyyaw(m)
-    def _on_sim_pose(self, m): self.sim_pose = _xyyaw(m)
-    def _on_scan(self, m): self.scan = m
+    def _on_real_pose(self, m): self.real_pose = _xyyaw(m); self._seen('real_pose')
+    def _on_sim_pose(self, m): self.sim_pose = _xyyaw(m); self._seen('sim_pose')
+    def _on_scan(self, m): self.scan = m; self._seen('scan')
     def _on_markers(self, m): self.markers = m
     def _on_mode(self, m): self.mode = m.data
     def _on_sync_ok(self, m): self.sync_ok = m.data
     def _on_sync_err(self, m): self.sync_err = (m.x, m.y, m.z)
-    def _on_latency(self, m): self.latency_ms = m.data
-    def _on_health(self, m): self.battery_v = m.voltage
-    def _on_safety(self, m): self.safety_blocked = m.data
+    def _on_latency(self, m): self.latency_ms = m.data; self._seen('latency')
+
+    def _on_health(self, m):
+        # The real OpenCR emits voltage=0.0 / present=False frames at bringup or on a serial
+        # hiccup — without this guard one such frame painted a phantom "0.00 V" critical on a
+        # healthy pack. Only finite positive voltages are accepted (and stamped as live data).
+        if math.isfinite(m.voltage) and m.voltage > 0.0:
+            self.battery_v = m.voltage
+            self._seen('battery')
+
+    def _on_safety(self, m): self.safety_blocked = m.data; self._seen('safety')
     def _on_mission_state(self, m): self.mission_state = m.data
     def _on_estop(self, m): self.estop = m.data
+
+    # ---- stream liveness: a frozen console must visibly read as frozen ----
+    def _seen(self, key: str) -> None:
+        self.last_seen[key] = time.monotonic()
+
+    def age_s(self, key: str) -> float:
+        """Seconds since the last ACCEPTED message on `key` (inf when never seen)."""
+        t = self.last_seen.get(key)
+        return float('inf') if t is None else time.monotonic() - t
+
+    def link_stale(self) -> bool:
+        """True while the mediator's gate loop is silent (no /dt/safety for stale_after_s).
+        The safety/E-STOP banners must then read UNKNOWN, not the last green."""
+        return self.age_s('safety') > self.stale_after_s
 
     def _on_alert(self, m):
         self.last_alert = m.data
@@ -210,8 +240,11 @@ def _make_window(bridge: GuiBridge):
             qp.drawImage(target, self._img)
             self._draw_scan(qp)
             self._draw_blooms(qp, sc)
-            self._draw_pose(qp, self.bridge.real_pose, QtGui.QColor(38, 204, 64))   # real = green
-            self._draw_pose(qp, self.bridge.sim_pose, QtGui.QColor(51, 140, 255))   # sim = blue
+            # a stale pose is the robot's PAST, not its position — don't draw it as live
+            if self.bridge.age_s('real_pose') <= self.bridge.stale_after_s:
+                self._draw_pose(qp, self.bridge.real_pose, QtGui.QColor(38, 204, 64))   # real = green
+            if self.bridge.age_s('sim_pose') <= self.bridge.stale_after_s:
+                self._draw_pose(qp, self.bridge.sim_pose, QtGui.QColor(51, 140, 255))   # sim = blue
             qp.end()
 
         def _active_pose(self):
@@ -225,8 +258,8 @@ def _make_window(bridge: GuiBridge):
 
         def _draw_scan(self, qp):
             scan, pose = self.bridge.scan, self._active_pose()
-            if scan is None or pose is None:
-                return
+            if scan is None or pose is None or self.bridge.age_s('scan') > self.bridge.stale_after_s:
+                return                       # a frozen scan overlay must vanish, not look live
             px, py, pyaw = pose
             qp.setPen(QtGui.QPen(QtGui.QColor(255, 80, 80, 200), 2))
             for rx, ry in hud.scan_points(list(scan.ranges), scan.angle_min, scan.angle_increment,
@@ -312,29 +345,46 @@ def _make_window(bridge: GuiBridge):
 
         def _refresh(self):
             b = self.bridge
+            # Honesty first: /dt/safety is the mediator heartbeat. While it is silent the console
+            # must say UNKNOWN — the old behaviour kept painting the last (green) values, so a dead
+            # mediator / dropped Wi-Fi looked exactly like a healthy session.
+            link_lost = b.link_stale()
             shadow = "  (green = commanded shadow)" if b.mode == 'sim_only' else ""
-            self._set('mode', f"MODE: {b.mode}{shadow}", 'green')
+            self._set('mode', f"MODE: {b.mode}{shadow}" + ("  — DT LINK LOST" if link_lost else ""),
+                      'amber' if link_lost else 'green')
             self._set('mission', f"MISSION: {b.mission_state}", 'green')
             self._set('sync', f"SYNC: {hud.sync_text(b.sync_ok)}  "
                       f"dxy={b.sync_err[0]:.2f} dyaw={b.sync_err[1]:.2f}",
                       'green' if b.sync_ok else 'red')
-            lat = '—' if math.isnan(b.latency_ms) else f"{b.latency_ms:.0f} ms"
-            lat_col = ('green' if math.isnan(b.latency_ms)
-                       or b.latency_ms <= b.latency_budget_ms else 'red')
-            self._set('latency', f"LATENCY: {lat}", lat_col)
+            lat_age = b.age_s('latency')
+            if math.isnan(b.latency_ms):
+                self._set('latency', "LATENCY: —", 'green')
+            elif lat_age > 10.0:
+                # the sample is real but old (latency is only measured on a command->motion
+                # onset) — show its age instead of an eternally-green frozen number
+                self._set('latency', f"LATENCY: {b.latency_ms:.0f} ms ({lat_age:.0f}s ago)", 'amber')
+            else:
+                self._set('latency', f"LATENCY: {b.latency_ms:.0f} ms",
+                          'green' if b.latency_ms <= b.latency_budget_ms else 'red')
             alert_age = time.monotonic() - b.last_alert_t
             if b.last_alert and alert_age < 10.0:
                 self._set('alerts', f"ALERT: {b.last_alert}", 'red')
             else:
                 self._set('alerts', "ALERTS: none", 'green')
-            bcol = 'green' if math.isnan(b.battery_v) else hud.battery_color(
-                b.battery_v, b.battery_low_v, b.battery_critical_v)
-            bv = '—' if math.isnan(b.battery_v) else f"{b.battery_v:.2f} V"
-            self._set('battery', f"BATTERY: {bv}", bcol)
-            self._set('safety', f"SAFETY: {hud.safety_text(b.safety_blocked)}",
-                      'red' if b.safety_blocked else 'green')
-            self._set('estop', "E-STOP: ENGAGED" if b.estop else "E-STOP: clear",
-                      'red' if b.estop else 'green')
+            if b.age_s('battery') > 3.0 * b.stale_after_s:
+                # never seen a valid frame, or the feed died — '—' must not read as healthy green
+                self._set('battery', "BATTERY: — (no data)", 'amber')
+            else:
+                self._set('battery', f"BATTERY: {b.battery_v:.2f} V", hud.battery_color(
+                    b.battery_v, b.battery_low_v, b.battery_critical_v))
+            if link_lost:
+                self._set('safety', "SAFETY: UNKNOWN — DT LINK LOST", 'amber')
+                self._set('estop', "E-STOP: UNKNOWN — DT LINK LOST", 'amber')
+            else:
+                self._set('safety', f"SAFETY: {hud.safety_text(b.safety_blocked)}",
+                          'red' if b.safety_blocked else 'green')
+                self._set('estop', "E-STOP: ENGAGED" if b.estop else "E-STOP: clear",
+                          'red' if b.estop else 'green')
             self.canvas.update()
 
         def _set(self, key, text, color):

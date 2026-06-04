@@ -89,6 +89,15 @@
     sim_only_sync_source: commanded   # commanded => mediator publishes the integrated-command shadow
                                       # as /dt/real_pose (the sim_only sync source); none => no shadow.
 
+    # --- operator console liveness ---
+    gui_stale_after_s: 2.0         # /dt/safety doubles as the mediator heartbeat (republished every
+                                   # command tick at cmd_rate_hz); silent longer than this -> the
+                                   # console's SAFETY/E-STOP banners read UNKNOWN (DT LINK LOST) and
+                                   # stale pose/scan overlays stop drawing. A dead mediator or a
+                                   # dropped Wi-Fi link must NOT keep looking like a healthy green
+                                   # session. 2.0 s = 40x the 20 Hz cmd tick (no false positives),
+                                   # small enough to flag a real link drop while the operator watches.
+
     # --- battery (non-motion state sync) ---
     battery_low_v: 11.0            # GUI battery banner turns AMBER below this (operator_gui, PLAN T4.2).
     battery_critical_v: 10.5       # real battery below this => auto E-STOP on /dt/estop (mediator).

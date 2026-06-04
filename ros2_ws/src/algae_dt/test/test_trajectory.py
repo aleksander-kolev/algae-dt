@@ -53,3 +53,14 @@ def test_clamp_amplitude_shrinks_an_unsafe_sweep():
 
 def test_clamp_amplitude_refuses_a_centre_inside_the_keepout():
     assert tr.clamp_amplitude_for_keepout(0.0, 0.0, 0.1, 0.0, 0.6, 'y', 0.30) is None
+
+
+def test_clamp_negative_amplitude_still_enforces_keepout():
+    """-A and +A sweep the IDENTICAL segment, but the old clamp returned a value LARGER than a
+    negative input - the caller's `clamped < amplitude` guard then discarded the clamp entirely
+    and the box swept straight through the keep-out (onto the robot spawn). The clamp now
+    normalizes to the magnitude at the boundary."""
+    a = tr.clamp_amplitude_for_keepout(0.0, 0.0, 0.6, 0.0, -0.6, 'x', 0.30)
+    assert a is not None and 0.0 <= a <= 0.6, "clamp must return a magnitude <= |amplitude|"
+    assert tr.sweep_clearance(0.0, 0.0, 0.6, 0.0, a, 'x') >= 0.30 - 1e-6, \
+        "the clamped sweep must keep the keep-out clearance"

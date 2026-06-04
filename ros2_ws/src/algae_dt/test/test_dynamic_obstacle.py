@@ -145,3 +145,26 @@ def test_set_pose_failure_rearms_spawn():
         node.destroy_node()
     finally:
         rclpy.shutdown()
+
+
+def test_negative_amplitude_cannot_bypass_the_keepout_clamp():
+    """amplitude:=-0.6 used to invert the `clamped < amplitude` guard: the clamp was silently
+    skipped and the static box teleported straight through the robot spawn (0,0). The node now
+    takes the magnitude, so the sweep keeps the keep-out clearance regardless of the typed sign."""
+    from algae_dt.lib import trajectory
+    rclpy.init()
+    try:
+        node = DynamicObstacle(parameter_overrides=[
+            Parameter('spawn', Parameter.Type.BOOL, False),
+            Parameter('center_x', Parameter.Type.DOUBLE, 0.6),
+            Parameter('center_y', Parameter.Type.DOUBLE, 0.0),
+            Parameter('axis', Parameter.Type.STRING, 'x'),
+            Parameter('amplitude', Parameter.Type.DOUBLE, -0.6),
+        ])
+        assert node.amplitude >= 0.0, "amplitude is a magnitude after the fix"
+        assert trajectory.sweep_clearance(0.0, 0.0, node.cx, node.cy, node.amplitude,
+                                          node.axis) >= node.keepout_radius_m - 1e-6, \
+            "the swept segment must keep the keep-out clearance from the robot spawn"
+        node.destroy_node()
+    finally:
+        rclpy.shutdown()

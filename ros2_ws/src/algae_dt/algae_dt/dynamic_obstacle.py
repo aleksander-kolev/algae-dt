@@ -35,7 +35,9 @@ class DynamicObstacle(Node):
         self.cx = gp('center_x', 0.6)
         self.cy = gp('center_y', 0.0)
         self.z = gp('center_z', 0.25)
-        self.amplitude = gp('amplitude', 0.6)
+        # magnitude: -A and +A are the same sweep, and a raw negative here inverted the
+        # `clamped < amplitude` keep-out guard below (the clamp was silently skipped).
+        self.amplitude = abs(gp('amplitude', 0.6))
         self.period = gp('period', 12.0)
         # `axis` tolerates ros2's YAML coercion of a bare `-p axis:=y` to bool True (the "Norway
         # problem"): declare it dynamically-typed and normalize to 'x'/'y' so the demo never crashes.
