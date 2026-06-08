@@ -78,5 +78,3 @@ def predict_severity(radius: float, temperature: float):
 
     return severity, round(t_harmful, 2)
 
-severity, t_harmful = predict_severity(15, water_temperature)
-print(f"Risk: {severity}, Days until harmful: {t_harmful}")

@@ -26,6 +26,7 @@ from std_msgs.msg import Bool, Float64, String
 from visualization_msgs.msg import Marker, MarkerArray
 
 from algae_dt.lib import geometry, hud
+from algae_dt.lib.bloom_predictor import fetch_water_temperature, predict_severity
 from algae_dt.lib.ros_utils import declare_get, load_package_map
 
 
@@ -87,6 +88,7 @@ class GuiBridge(Node):
         self.pub_blooms = self.create_publisher(MarkerArray, '/dt/blooms', _latched(10))
         self.pub_cmd = self.create_publisher(String, '/dt/mission_cmd', 10)
         self.pub_estop = self.create_publisher(Bool, '/dt/estop_cmd', _latched())
+        self.pub_alerts = self.create_publisher(String, '/dt/alerts', 10)
 
         self.create_subscription(PoseStamped, '/dt/real_pose', self._on_real_pose, 10)
         self.create_subscription(PoseStamped, '/dt/sim_pose', self._on_sim_pose, 10)
@@ -147,6 +149,20 @@ class GuiBridge(Node):
         self._blooms.append((self._next_id, float(x), float(y)))
         self._next_id += 1
         self._publish_blooms()
+        
+        temperature = fetch_water_temperature()
+        severity, t_harmful = predict_severity(self.bloom_radius, temperature)
+
+        if severity == 'CRITICAL':
+            self.pub_alerts.publish(String(data = "CRITICAL bloom detected! Dispatching robot immediately."))
+        elif severity == 'HIGH':
+            self.pub_alerts.publish(String(data = f"HIGH severity bloom detected! Dispatching robot in {t_harmful - 1:.2f} days."))
+        elif severity == 'MEDIUM':
+            self.pub_alerts.publish(String(data = f"MODERATE severity bloom detected! Potentially, harmful in {t_harmful - 1:.2f} days."))
+        elif severity == 'LOW':
+            self.pub_alerts.publish(String(data = f"LOW severity bloom detected! Potentially, harmful in {t_harmful - 1:.2f} days."))
+        else: 
+            self.pub_alerts.publish(String(data = "Bloom detected. Severity: SAFE"))
 
     def clear_blooms(self) -> None:
         self._blooms = []
