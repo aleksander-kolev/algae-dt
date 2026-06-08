@@ -24,3 +24,4 @@ sync_metrics_*.csv
 # Secrets / large media
 CREDENTIALS.txt
 *.mp4
+.cache.sqlite
