@@ -30,9 +30,6 @@ params = {
 responses = openmeteo.weather_api(url, params = params)
 
 response = responses[0]
-print(f"Coordinates: {response.Latitude()}°N {response.Longitude()}°E")
-print(f"Elevation: {response.Elevation()} m asl")
-print(f"Timezone difference to GMT+0: {response.UtcOffsetSeconds()}s")
 
 hourly = response.Hourly()
 sea_surface_temperature = hourly.Variables(0).ValuesAsNumpy()
