@@ -155,8 +155,16 @@ class GuiBridge(Node):
 
         if severity == 'CRITICAL':
             self.pub_alerts.publish(String(data = "CRITICAL bloom detected! Dispatching robot immediately."))
+            self.start()
         elif severity == 'HIGH':
             self.pub_alerts.publish(String(data = f"HIGH severity bloom detected! Dispatching robot in {t_harmful - 1:.2f} days."))
+            delay_seconds = (t_harmful - 1) * 24 * 60 * 60
+            def _dispatch():
+                self.start()
+                timer.cancel()
+            
+            timer = self.create_timer(delay_seconds, _dispatch)
+            
         elif severity == 'MEDIUM':
             self.pub_alerts.publish(String(data = f"MODERATE severity bloom detected! Potentially, harmful in {t_harmful - 1:.2f} days."))
         elif severity == 'LOW':
