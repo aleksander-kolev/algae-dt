@@ -3,6 +3,7 @@ from math import pi, log
 # Constants 
 decomposition_rate = 0.1 # deconpostion rate constant - how fast the bloom breaks down over time
 reference_temperature = 20.0 # Celsius
+M_harmful_threshold = 500.0 # tunable parameter
 
 # Bloom physical constants (assumptions)
 BLOOM_DEPTH = 1.0 # metres, thickness
@@ -50,3 +51,32 @@ hourly_dataframe = pd.DataFrame(data = hourly_data)
 water_temperature = float(hourly_dataframe[hourly_dataframe["date"].dt.date 
 == hourly_dataframe["date"].dt.date.iloc[0]]
 ["sea_surface_temperature"].mean())
+
+def predict_severity(radius: float, temperature: float):
+    # Step 1: calculate area from the algal bloom's radius
+    area_algal_bloom = pi * (radius ** 2)
+
+    # Step 2: convert area to mass
+    mass_algal_bloom = area_algal_bloom * BLOOM_DEPTH * BLOOM_DENSITY
+
+    # Step 3: check if already harmful
+    if mass_algal_bloom < 500.0:
+        return "SAFE", None
+
+    # Step 4: calculate days until harmful
+    t_harmful = -(reference_temperature / (decomposition_rate * temperature)) * log(1 - M_harmful_threshold / mass_algal_bloom)
+
+    # Step 5: assign severity level
+    if t_harmful <= 1:
+        severity = "CRITICAL"
+    elif t_harmful <= 3:
+        severity = "HIGH"
+    elif t_harmful <= 7:
+        severity = "MODERATE"
+    else:
+        severity = "LOW"
+
+    return severity, round(t_harmful, 2)
+
+severity, t_harmful = predict_severity(15, water_temperature)
+print(f"Risk: {severity}, Days until harmful: {t_harmful}")
