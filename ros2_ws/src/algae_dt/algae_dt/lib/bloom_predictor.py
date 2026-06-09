@@ -72,7 +72,7 @@ def predict_severity(radius: float, temperature: float):
     elif t_harmful <= 3:
         severity = "HIGH"
     elif t_harmful <= 7:
-        severity = "MODERATE"
+        severity = "MEDIUM"
     else:
         severity = "LOW"
 
