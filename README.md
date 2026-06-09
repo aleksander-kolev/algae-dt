@@ -87,6 +87,12 @@ You do **not** need ROS installed on the host; everything runs inside the contai
 
 ---
 
+## Python Dependencies
+
+Install the required packages to run 'bloom_predictor.py'
+
+  py -m pip install -r requirements.txt
+
 ## Run the simulation (WSL2 + Docker)
 
 Do this from a WSL terminal, in the repo root.
