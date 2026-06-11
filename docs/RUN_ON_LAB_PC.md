@@ -92,6 +92,15 @@ ros2 launch algae_dt bringup.launch.py mode:=both
 ```
 (Robot Pi bringup = step 2 above, same as the script way.)
 
+**Whole-repo-in-src variant:** dropping the ENTIRE repo into the workspace
+(`~/turtlebot3_ws/src/algae-dt/`) also works with the same Terminal-A commands MINUS the `cp` —
+colcon discovers the nested `ros2_ws/src/algae_dt` recursively, and `--packages-select algae_dt`
+builds it from wherever it sits. One trap: if `src/` holds BOTH the repo AND an old copied
+`src/algae_dt` (from a previous lab_run.sh / manual cp), colcon aborts with *duplicate package
+algae_dt* — `rm -rf ~/turtlebot3_ws/src/algae_dt` (keep the repo) and rebuild. A repo carried
+over with `build/`/`install/` inside its `ros2_ws/` is harmless (colcon's own `COLCON_IGNORE`
+markers in those dirs survive the copy), but `rm -rf` them if you want a guaranteed-clean crawl.
+
 ## 2D Pose Estimate — the one manual click (do it every run)
 Nav2's **AMCL** starts NOT knowing where the robot is (it seeds at the map origin). Five robots share
 the arena, so the real start never matches the origin — you must tell AMCL the true pose once:
