@@ -212,15 +212,44 @@ def test_nav_failure_skips_loudly_with_partial_summary():
     har.create_subscription(_String, '/dt/alerts', lambda m: alerts.append(m.data), 10)
     try:
         assert _spin_until(ex, lambda: len(_markers_by_id(har)) == 1)
+        # /dt/alerts is one-shot and deliberately NOT latched: starting before DDS discovery has
+        # matched the subscription silently loses the skip alert (flaked on a loaded CI host)
+        assert _spin_until(ex, lambda: runner.pub_alerts.get_subscription_count() > 0), \
+            "alerts subscription must be matched before the mission can skip"
         har.send('start')
         assert _spin_until(ex, lambda: har.last_state == 'complete (0 treated, 1 skipped)'), \
             f"partial mission must publish the summary state, got {har.last_state!r}"
         assert _markers_by_id(har) == {0: B.SKIPPED}
         assert har.max_omega == 0.0, "a failed nav must NOT spray"
-        assert any('BLOOM 0 SKIPPED' in a for a in alerts), \
+        # SPIN for the alert: it travels a different topic than the latched state that gated the
+        # assert above, and cross-topic delivery order is not guaranteed — checking the list
+        # without spinning raced the in-flight message and flaked
+        assert _spin_until(ex, lambda: any('BLOOM 0 SKIPPED' in a for a in alerts)), \
             f"a skip must raise an operator-visible alert, got {alerts}"
     finally:
         _teardown(runner, har, ex)
+
+
+def test_spray_omega_is_derated_in_real_modes():
+    """REGRESSION (lab 2026-06): the sim-tuned 2.8 rad/s spray demands ~0.224 m/s wheel speed — at
+    the real Burger's XL430 ceiling — so the REAL robot didn't spin while the ideal-motor sim did,
+    and every bloom stall-aborted. Real modes must use the derated spray_omega_real_radps; sim_only
+    keeps the throttle-compensating 2.8."""
+    from rclpy.parameter import Parameter as P
+    rclpy.init()
+    try:
+        sim = MissionRunner(navigator=FakeNavigator([]),
+                            parameter_overrides=[P('mode', P.Type.STRING, 'sim_only')])
+        assert sim.spray_omega == pytest.approx(2.8), "sim_only keeps the sim-tuned rate"
+        sim.destroy_node()
+        for mode in ('both', 'real_only'):
+            real = MissionRunner(navigator=FakeNavigator([]),
+                                 parameter_overrides=[P('mode', P.Type.STRING, mode)])
+            assert real.spray_omega == pytest.approx(1.5), \
+                f"{mode} must spray at the derated real-hardware rate"
+            real.destroy_node()
+    finally:
+        rclpy.shutdown()
 
 
 def test_all_treated_mission_stays_plain_complete():

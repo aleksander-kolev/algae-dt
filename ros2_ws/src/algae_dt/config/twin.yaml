@@ -150,11 +150,19 @@
     spray_revolutions: 3.0         # chemical spraying = this many FULL in-place spins at the bloom
                                    # centre (course "spin-spray" task). Duration = revs*2*pi/omega, so
                                    # at spray_omega_radps below that is ~18.8 s; raise omega to spray faster.
-    spray_omega_radps: 2.8         # in-place spin rate during spray (just under the 2.84 clamp). Chosen
-                                   # high on purpose: under a throttled sim real-time-factor (~0.5) the
-                                   # wall-clock spin rate is omega*RTF, so omega=1.0 looked like a slow
-                                   # drift (~0.5 rad/s real). 2.8 -> ~1.4 rad/s real = a brisk, visible
-                                   # spin; the closed-loop still guarantees exactly spray_revolutions turns.
+    spray_omega_radps: 2.8         # SIM in-place spin rate during spray (just under the 2.84 clamp).
+                                   # Chosen high on purpose: under a throttled sim real-time-factor
+                                   # (~0.5) the wall-clock spin rate is omega*RTF, so omega=1.0 looked
+                                   # like a slow drift. 2.8 -> ~1.4 rad/s real = a brisk, visible spin;
+                                   # the closed-loop still guarantees exactly spray_revolutions turns.
+    spray_omega_real_radps: 1.5    # REAL-mode (real_only/both) spin rate. NOT 2.8: a pure spin at
+                                   # w needs wheel speeds of w*(0.160/2) m/s, so 2.8 rad/s demands
+                                   # ~0.224 m/s per wheel — at/above the Burger XL430 ceiling
+                                   # (~0.22 m/s, which itself drops as the LiPo sags). Commanding the
+                                   # hardware maximum on a real pack made the REAL robot fail to spin
+                                   # while the sim (ideal motors) spun — the spray then honestly
+                                   # stall-aborted and skipped the bloom (observed in the lab,
+                                   # 2026-06). 1.5 rad/s = 46% wheel-speed margin, 3 revs in ~12.6 s.
     spray_stall_timeout_s: 3.0     # PRIMARY anti-stall guard: abort the spray when odom yaw has not
                                    # advanced for this many WALL seconds (frozen odom must not spin
                                    # forever). Unlike a total-time backstop it never fires on a

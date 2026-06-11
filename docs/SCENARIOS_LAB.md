@@ -60,10 +60,17 @@ Concise run scenarios. Setup commands → `docs/SETUP.md`. Each scenario: **step
   LDS-02 / gz validity edge), real and sim straddle "valid vs no-return" semi-independently →
   `/dt/sync_ok` flaps + sync alerts re-fire. Cosmetic (the gate is unaffected; resync ignores the
   sensor component). Park the demo facing nearer geometry if it distracts.
-- **S-EDGE-G mid-spray resync:** the 2.8 rad/s spray can hold `dyaw` past tolerance longer than
+- **S-EDGE-G mid-spray resync:** the spray can hold `dyaw` past tolerance longer than
   `resync_sustain_s` → expect at most one auto-resync per spray (cooldown-spaced). Harmless — the
   spin count is real-odom-based — and it lands honestly in the CSV `resync` column. Set
   `resync_auto_enable:=false` for a fully operator-controlled take.
+- **S-EDGE-H real robot won't spray-spin (sim does):** the sim-tuned 2.8 rad/s needs ~0.224 m/s
+  wheel speed = the Burger's motor ceiling; under battery sag the real robot can't reach it, the
+  spray stall-aborts (alert + bloom skipped) while the ideal-motor sim spins. Real modes now spray
+  at `spray_omega_real_radps` (1.5). If a real spin is still weak: check `/battery_state` ≥ ~11.5 V
+  under load, and isolate with
+  `ros2 topic pub -r 10 /dt/cmd_vel_raw geometry_msgs/msg/TwistStamped "{twist: {angular: {z: 1.0}}}"`
+  stepping z up until it stops responding.
 - **S-EDGE-B battery sag:** real V ≤ 10.5 → auto-E-STOP latches mid-mission. Start >12 V; RESUME after.
 - **S-EDGE-C AMCL re-seed:** any AMCL/Nav2 restart re-seeds to map origin → redo 2D Pose Estimate.
 - **S-EDGE-D Wi-Fi drop / scan stale:** safety gate fails SAFE (stale considered-scan → blocked).

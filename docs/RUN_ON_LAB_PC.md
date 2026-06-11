@@ -132,6 +132,23 @@ the arena, so the real start never matches the origin — you must tell AMCL the
   `ros2 launch algae_dt bringup.launch.py mode:=both use_fake_robot:=true`. Shut the robot down with
   `ssh turtlebot@192.168.8.36 'sudo shutdown now'` before the power switch.
 
+## Mid-session triage (fast checks when something misbehaves)
+- **Robot navigates but won't spray-spin (the sim spins):** the spray is rotation-only and fans
+  out to BOTH robots, so the sim spinning proves the command path — the real side is actuation.
+  Real modes spray at the derated `spray_omega_real_radps` (1.5 rad/s; the old 2.8 sat at the
+  motor ceiling). Isolate: `ros2 topic pub -r 10 /dt/cmd_vel_raw geometry_msgs/msg/TwistStamped
+  "{twist: {angular: {z: 1.0}}}"` — robot should spin; step z up to find the real limit. Check
+  battery under load (`ros2 topic echo /battery_state --field voltage`, want ≥ ~11.5 V) and, on
+  the Pi, that commands arrive (`ros2 topic hz /cmd_vel`). The skipped bloom + "spray stalled"
+  alert in the console/CSV is the honest record of the failed attempt.
+- **Nav hesitant / weaving / grazing walls:** first re-do the 2D Pose Estimate until the scan hugs
+  the walls (mislocalization explains most "buggy nav"). Then tune inflation at runtime, no
+  rebuild:
+  `ros2 param set /global_costmap/global_costmap inflation_layer.inflation_radius 0.25` (and the
+  same on `/local_costmap/local_costmap`), then clear both costmaps
+  (`ros2 service call /global_costmap/clear_entirely_global_costmap nav2_msgs/srv/ClearEntireCostmap`,
+  same for local). Params reset on a Nav2 restart.
+
 ## Before you leave (every session — the laptop can be wiped without notice)
 1. Commit + push anything you changed: `git add -A && git commit -m "lab session" && git push`
    (no network? copy the repo + workspace changes to the **USB stick**).
