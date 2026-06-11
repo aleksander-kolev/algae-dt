@@ -36,6 +36,26 @@ reach ROS); (3) `both` `/sim/*` namespacing done (custom bridge + namespaced RSP
 (4) Nav2 rewrite keys (`collision_monitor.cmd_vel_out_topic`, `set_initial_pose`) verified present in
 `burger.yaml`; (5) the cmd_vel chokepoint is TwistStamped end-to-end.
 
+**2026-06-11 lab-bug fix wave** (real-robot session forensics): the Burger's ~0.22 m/s wheel ceiling
+saturated DWB's 0.3 m/s plans, bending every fast arc — the launch now caps Nav2
+`max_vel_x`/`max_speed_xy` at 0.22 and `lib/safety.limit_command` clamps (vx,wz) with ONE shared
+scale factor (curvature-preserving), so real arcs match RViz; the 25 cm stop is STICKY
+(`lib/safety.BlockLatch`: once blocked, forward stays cut until the front range exceeds
+`stop_release_m` 0.35 m for `stop_release_hold_s` 0.3 s — no more rotate-and-lurch past the box);
+the mediator scales ONLY the sim fan-out by clamp(1/RTF) (`lib/sync.rtf_estimate`/`rtf_compensation`)
+so the mirror no longer under-travels at real-time-factor < 1; virtual obstacles now reach REAL nav —
+the mediator publishes `/dt/scan_nav` (real scan + TRUSTED mirror returns overlaid by angle,
+`lib/scanmerge.py`) and the launch points the 4 costmap scan sources + collision_monitor at it while
+AMCL stays on the bare `/scan`; `lib/nav2check.py` CHECKS AND REPAIRS the stock Nav2 params
+(replace-or-ADD every override, patched file to a temp path — RewrittenYaml's silent no-op on
+missing keys is out of the safety path; the lab's no-`use_sim_time` burger.yaml, 2026-06-11, is
+auto-fixed) — the launch REFUSES real modes only when no `collision_monitor`/`amcl` section can
+host the chokepoint, and `lab_run.sh` aborts (exit 6); and `lab_run.sh` records evidence by default into
+`~/turtlebot3_ws/lab_logs/<stamp>_<gitref>/` (bag + console.log + per-node ROS logs + sync CSV;
+`--no-log` opts out). **Meta-finding:** the 2026-06 session demoed the stale DEFAULT branch (docs
+said plain `git clone`) — **push the current branch before any lab session**; `lab_run.sh` prints
+the demoed commit.
+
 **REMAINING (environment/process — not code):**
 - **navigate-and-spray now COMPLETES in throttled sim_only** (verified live on WSLg: `idle →
   navigating:0 → spraying:0 → complete`, measured ~3.00 full revolutions (closed-loop from
@@ -60,7 +80,8 @@ reach ROS); (3) `both` `/sim/*` namespacing done (custom bridge + namespaced RSP
    `docker/open_both.sh`.
 2. **Lab:** connect to the Burger (SETUP §3), then `mode:=both` via `scripts/lab_run.sh` (or
    `mode:=real_only` via a manual `ros2 launch`) (`docs/RUN_ON_LAB_PC.md`). Validate the 25 cm stop on real `/scan`, AMCL
-   2D-Pose-Estimate, one bloom navigate+spray, the `both` mirror.
+   2D-Pose-Estimate, one bloom navigate+spray, the `both` mirror. Evidence (bag/console/CSV) is
+   auto-recorded under `~/turtlebot3_ws/lab_logs/` — copy it off before leaving.
 3. **Verify anytime:** `docker run --rm -v "$PWD/ros2_ws:/ws" -v "$PWD/docker:/ci" algae-dt:dev bash
    /ci/ci.sh` (252 tests + build); `bash /ci/sim_smoke.sh` (sim_only stack) and `bash
    /ci/both_smoke.sh` (live `both` mirror: ground-truth pose path + a real resync round-trip).
@@ -75,7 +96,8 @@ reach ROS); (3) `both` `/sim/*` namespacing done (custom bridge + namespaced RSP
 2. **Topic-collision rule:** real = bare topics, sim = `/sim/*`, sim TF off global `/tf` in `both`.
 3. **`use_sim_time: true` only in `sim_only`** (bool to node params, lowercase string to includes).
 4. **Safety gate fails SAFE** (stale considered-scan → blocked; startup no-data → unblocked); EITHER
-   scan <0.25 m zeroes forward on BOTH.
+   scan <0.25 m zeroes forward on BOTH; the block is STICKY (releases only at `stop_release_m`
+   sustained `stop_release_hold_s`).
 5. **Nav failure / aborted spray must NOT mark a bloom treated** (honest accounting).
 6. **No sudo / no settings changes on lab kit**; build only `--packages-select algae_dt`.
 

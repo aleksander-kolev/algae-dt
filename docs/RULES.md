@@ -48,9 +48,14 @@ runtime failure), **C) coding & process conventions**.
    Real = bare (`/scan /odom /cmd_vel /tf`), sim = `/sim/*`, sim TF off the global `/tf` in `both`.
 4. **`use_sim_time:=true` ONLY in `sim_only`.** In `real_only`/`both` the real robot leads on wall
    time; the sim mirrors and its sim-stamped topics are re-stamped, never reaching Nav2/TF.
-5. **The safety gate fails SAFE.** A *considered* scan that goes stale (had data, now older than
-   `max_data_age_s`) is treated as blocked. Startup with no data yet stays unblocked (so the robot
-   can warm up). Either real OR sim scan < `stop_distance_m` (0.25) zeroes forward motion on BOTH.
+5. **The safety gate fails SAFE — and the block is STICKY.** A *considered* scan that goes stale
+   (had data, now older than `max_data_age_s`) is treated as blocked. Startup with no data yet stays
+   unblocked (so the robot can warm up). Either real OR sim scan < `stop_distance_m` (0.25) zeroes
+   forward motion on BOTH. Once blocked, forward stays cut until the front range exceeds
+   `stop_release_m` (0.35) continuously for `stop_release_hold_s` (0.3 s) — releasing right at the
+   0.25 line let a live Nav2 rotation swing the obstacle out of the front cone and lurch-creep past
+   it. Rotation and reverse stay allowed throughout (course rule), and startup no-data still never
+   blocks.
 6. **Auto-E-STOP is PUBLISHED, latched.** The mediator owns `/dt/estop` (latched), sets `True` on
    real critical battery (≤ `battery_critical_v`); mission + GUI obey it. Distributed state lives on
    a topic, never in one node's variable. RESUME clears it.
@@ -65,6 +70,8 @@ runtime failure), **C) coding & process conventions**.
 9. **`ROS_DOMAIN_ID = robot number` on both sides**, same Wi-Fi. Mismatch → zero topics cross.
 10. **Isolate back-to-back full-stack sim tests by `ROS_DOMAIN_ID`** (+ a settle delay): sequential
     gz+Nav2 stacks on one domain collide (duplicate nodes → `planner_server` SIGABRT).
+11. **Nav2's obstacle sources read `/dt/scan_nav` (real scan + trusted mirror overlay); AMCL stays
+    on the bare `/scan`** — virtual obstacles must steer planning, never localization.
 
 ## C. Coding & process conventions (also `~/.claude/rules/common/*`)
 - **Reuse before building.** The stock turtlebot3 packages do model/spawn/RSP/Nav2/teleop/SLAM — use

@@ -8,6 +8,8 @@ Concise run scenarios. Setup commands → `docs/SETUP.md`. Each scenario: **step
    `nav2_bringup/_common/_simple_commander`, `ros_gz_sim/_bridge`, `rviz2`, `PyQt5`).
 3. `ssh turtlebot@<ip>` → `ros2 launch turtlebot3_bringup robot.launch.py`.
 4. On laptop: `ros2 topic hz /scan` (~5 Hz), `ros2 topic type /cmd_vel` → `TwistStamped`.
+5. Evidence: every `lab_run.sh` run auto-records bag+console+CSV under
+   `~/turtlebot3_ws/lab_logs/<stamp>/` — copy off before leaving (`--no-log` to disable).
 - **Expected:** topics flow. **If-not:** wrong domain/Wi-Fi, or robot Pi not up — fix before launching.
 
 ## S1 · Teleop through the mediator (real)
@@ -17,8 +19,12 @@ Concise run scenarios. Setup commands → `docs/SETUP.md`. Each scenario: **step
 
 ## S2 · Safety stop (real, pillar ③)
 - Drive toward a box.
-- **Expected:** forward motion stops at ~0.25 m on `/scan`; `/dt/safety=true (blocked)`; rotate/back-up still work.
-- **If-not:** check `/dt/scan_active` populated; `stop_distance_m`; front-sector convention.
+- **Expected:** forward motion stops at <0.25 m on `/scan`; `/dt/safety=true (blocked)`; the block is
+  **sticky** — forward stays cut until the front range exceeds 0.35 m (`stop_release_m`) continuously
+  for 0.3 s (`stop_release_hold_s`), so rotating under a live Nav2 goal can no longer swing the box
+  out of the front cone and lurch-creep past it. Rotate/back-up still allowed throughout.
+- **If-not:** check `/dt/scan_active` AND `/dt/scan_nav` populated; `stop_distance_m`/`stop_release_m`;
+  front-sector convention.
 
 ## S3 · `real_only` autonomous bloom (Nav2 + spray)
 1. `ros2 launch algae_dt bringup.launch.py mode:=real_only` (RViz opens automatically in this mode);
@@ -34,8 +40,14 @@ Concise run scenarios. Setup commands → `docs/SETUP.md`. Each scenario: **step
   stands wherever it stands — after the 2D Pose Estimate the pose error exceeds tolerance, and
   twin_resync **auto-snaps the sim onto the real pose** within ~`resync_sustain_s` (or press
   **RESYNC TWIN** immediately). Verify `/dt/sync_ok` goes green before Start.
-- **Expected:** both robots move 1:1; `/dt/sync_ok` green; obstacle in EITHER world stops BOTH;
-  `sync_metrics_*.csv` logs Δxy/latency/stop_skew/resync; sim on `/sim/*` only (no collision).
+- **Virtual-obstacle beat:** with SYNC green, drop a box in the GAZEBO twin only → BOTH robots stop
+  (dual gate) AND the real robot's Nav2 **replans around the virtual box** (`/dt/scan_nav` overlays
+  the trusted mirror's returns onto the costmap scan). An out-of-sync twin never injects virtual
+  obstacles (same trust rule as the gate).
+- **Expected:** both robots move 1:1; mirror fan-out is **RTF-compensated** (the twin covers the
+  real robot's ground per wall second even on a throttled sim); `/dt/sync_ok` green; obstacle in
+  EITHER world stops BOTH; `sync_metrics_*.csv` logs Δxy/latency/stop_skew/resync; sim on `/sim/*`
+  only (no collision).
 - **If-not:** topic collision (sim not namespaced) / domain mismatch / sim cmd_vel type unverified.
 
 ## S5 · State sync, alerts & resync (pillar ②)
@@ -69,7 +81,8 @@ Concise run scenarios. Setup commands → `docs/SETUP.md`. Each scenario: **step
   grazing gz geometry and phantom-braking the real robot through the dual gate. Fixed: the
   mirror's scan now vetoes only while `/dt/sync_ok` holds (the real robot's own LiDAR always
   gates). If nav still misbehaves with SAFETY green, it's localization — see the triage section
-  in RUN_ON_LAB_PC.md.
+  in RUN_ON_LAB_PC.md. If nav still stutters: `ros2 topic info -v /cmd_vel` — more than one
+  publisher means Nav2 bypassed the bus (nav2check preflight failure class).
 - **S-EDGE-H real robot won't spray-spin (sim does):** the sim-tuned 2.8 rad/s needs ~0.224 m/s
   wheel speed = the Burger's motor ceiling; under battery sag the real robot can't reach it, the
   spray stall-aborts (alert + bloom skipped) while the ideal-motor sim spins. Real modes now spray

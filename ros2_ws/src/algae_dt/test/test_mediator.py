@@ -444,6 +444,122 @@ def test_both_mode_mirror_scan_gates_only_while_in_sync():
         rclpy.shutdown()
 
 
+def test_both_mode_scan_nav_overlays_trusted_mirror_obstacles():
+    """USER-REPORTED (lab 2026-06): placing things in the gazebo twin didn't affect the real
+    robot's NAV — Nav2's costmaps read only the real /scan, so virtual obstacles existed for the
+    last-second 25 cm gate but never for path planning. /dt/scan_nav must carry the real scan
+    with the TRUSTED mirror's returns overlaid (the launch points every Nav2 obstacle source at
+    it) — but ONLY once /dt/localized holds (pre-2D-Pose-Estimate the mirror stands at the
+    origin while the real robot stands anywhere; its returns would be marked into the real
+    costmaps as phantom walls) — and fall back to a verbatim pass-through the moment the twin
+    is out of sync."""
+    from geometry_msgs.msg import TransformStamped
+    from tf2_ros import StaticTransformBroadcaster
+
+    rclpy.init()
+    med = TwinMediator(parameter_overrides=[Parameter('mode', Parameter.Type.STRING, 'both')])
+    har = rclpy.create_node('scan_nav_harness')
+    got = {'scan': None}
+    p_scan = har.create_publisher(LaserScan, '/scan', qos_profile_sensor_data)
+    p_sim = har.create_publisher(LaserScan, '/sim/scan', qos_profile_sensor_data)
+    p_sync = har.create_publisher(Bool, '/dt/sync_ok', _latched())
+    har.create_subscription(LaserScan, '/dt/scan_nav',
+                            lambda m: got.update(scan=m), qos_profile_sensor_data)
+
+    def _tick():
+        p_scan.publish(_make_scan(3.0))      # the real path is clear
+        p_sim.publish(_make_scan(1.0))       # a virtual wall 1 m ahead in the twin
+    har.create_timer(1.0 / 30.0, _tick)
+
+    ex = SingleThreadedExecutor()
+    ex.add_node(med)
+    ex.add_node(har)
+    front = 360 // 2                         # _make_scan puts the front beams at n/2 (angle ~0)
+    try:
+        # PRE-LOCALIZATION: even a nominally in-sync mirror must NOT inject virtual returns.
+        ok = _spin_until(ex, lambda: got['scan'] is not None
+                         and abs(got['scan'].ranges[front] - 3.0) < 1e-6)
+        assert ok, "/dt/scan_nav must be a verbatim pass-through before AMCL localizes"
+
+        bc = rclpy.create_node('scan_nav_tf_bc')         # map<-odom appears (the 2D Pose Estimate)
+        stb = StaticTransformBroadcaster(bc)
+        tf = TransformStamped()
+        tf.header.frame_id = 'map'
+        tf.child_frame_id = 'odom'
+        tf.transform.rotation.w = 1.0
+        stb.sendTransform(tf)
+        ex.add_node(bc)
+        try:
+            ok = _spin_until(ex, lambda: got['scan'] is not None
+                             and abs(got['scan'].ranges[front] - 1.0) < 1e-6, secs=10.0)
+            assert ok, "once localized, the trusted mirror's 1 m wall must appear on /dt/scan_nav"
+            assert abs(got['scan'].ranges[10] - 3.0) < 1e-6, "off-front beams stay the real returns"
+            p_sync.publish(Bool(data=False))             # the twin diverges -> the overlay must stop
+            ok = _spin_until(ex, lambda: got['scan'] is not None
+                             and abs(got['scan'].ranges[front] - 3.0) < 1e-6, secs=8.0)
+            assert ok, "an out-of-sync mirror must NOT inject virtual obstacles (pass-through)"
+        finally:
+            ex.remove_node(bc)
+            bc.destroy_node()
+    finally:
+        ex.shutdown()
+        med.destroy_node()
+        har.destroy_node()
+        rclpy.shutdown()
+
+
+def test_both_mode_sim_fanout_is_rtf_compensated():
+    """REGRESSION (lab 2026-06, 'the twin doesn't take the path the real one takes'): Gazebo
+    integrates /sim/cmd_vel in SIM time, so at RTF<1 the open-loop mirror under-travels per wall
+    second and turns in the wrong places. The mediator measures RTF from /clock-vs-wall and scales
+    ONLY the sim fan-out by 1/RTF (clamped): here the harness publishes a half-speed /clock, so
+    /sim/cmd_vel must carry ~2x the bus command while the REAL /cmd_vel stays untouched."""
+    from rosgraph_msgs.msg import Clock as ClockMsg
+
+    rclpy.init()
+    med = TwinMediator(parameter_overrides=[Parameter('mode', Parameter.Type.STRING, 'both')])
+    har = rclpy.create_node('rtf_harness')
+    state = {'real': None, 'sim': None}
+    p_cmd = har.create_publisher(TwistStamped, '/dt/cmd_vel_raw', 10)
+    p_scan = har.create_publisher(LaserScan, '/scan', qos_profile_sensor_data)
+    p_batt = har.create_publisher(BatteryState, '/battery_state', 10)
+    p_clock = har.create_publisher(ClockMsg, '/clock', 10)
+    har.create_subscription(TwistStamped, '/cmd_vel',
+                            lambda m: state.update(real=m.twist.linear.x), 10)
+    har.create_subscription(TwistStamped, '/sim/cmd_vel',
+                            lambda m: state.update(sim=m.twist.linear.x), 10)
+
+    t0 = time.monotonic()
+
+    def _tick():
+        p_cmd.publish(TwistStamped(twist=_twist(0.1)))
+        p_scan.publish(_make_scan(3.0))
+        b = BatteryState()
+        b.voltage = 12.0
+        p_batt.publish(b)
+        sim_elapsed = (time.monotonic() - t0) * 0.5          # sim time runs at RTF = 0.5
+        c = ClockMsg()
+        c.clock.sec = int(sim_elapsed)
+        c.clock.nanosec = int((sim_elapsed % 1.0) * 1e9)
+        p_clock.publish(c)
+    har.create_timer(1.0 / 30.0, _tick)
+
+    ex = SingleThreadedExecutor()
+    ex.add_node(med)
+    ex.add_node(har)
+    try:
+        ok = _spin_until(ex, lambda: state['real'] is not None and state['sim'] is not None
+                         and abs(state['real'] - 0.1) < 1e-6
+                         and 0.16 < state['sim'] < 0.24, secs=10.0)
+        assert ok, (f"sim fan-out must be ~2x at RTF 0.5 while real stays 1x "
+                    f"(real={state['real']}, sim={state['sim']})")
+    finally:
+        ex.shutdown()
+        med.destroy_node()
+        har.destroy_node()
+        rclpy.shutdown()
+
+
 def test_both_mode_sim_pose_is_gz_ground_truth_filtered_by_entity():
     """In `both`, /dt/sim_pose is the gz GROUND-TRUTH pose of the mirror entity (bridged Pose_V ->
     TFMessage on /sim/ground_truth), published verbatim (world frame == map frame by construction)

@@ -69,8 +69,20 @@ Nodes:
   pre-safety command bus `/dt/cmd_vel_raw` (**`TwistStamped`** — Jazzy norm; see the type contract
   below) + both scans; applies the **25 cm dual-LiDAR safety gate** (the mirror's scan vetoes the
   real robot ONLY while `/dt/sync_ok` holds — a diverged mirror measures the wrong place and used
-  to phantom-brake real nav); fans the safe command out to
-  **`/cmd_vel` (TwistStamped, real)** AND **`/sim/cmd_vel` (sim, type verified at runtime)**.
+  to phantom-brake real nav). The gate is **sticky** (`lib/safety.BlockLatch`): once blocked,
+  forward stays cut until the front range exceeds `stop_release_m` (0.35 m) continuously for
+  `stop_release_hold_s` (0.3 s) — rotating under a live Nav2 goal used to swing the obstacle out
+  of the ±20° front cone and lurch-creep past the box; rotation/back-up stay allowed, startup
+  no-data still never blocks. Fans the safe command out to **`/cmd_vel` (TwistStamped, real)**
+  AND **`/sim/cmd_vel`** (sim, type verified at runtime; in `both` scaled by clamp(1/RTF) —
+  `lib/sync.rtf_estimate`/`rtf_compensation` off `/clock`-vs-wall — gz integrates commands in SIM
+  time, so an open-loop mirror under-travels per wall second at RTF<1; no-op at RTF≈1; residual
+  drift stays twin_resync's job). Publishes **`/dt/scan_nav`** — the real `/scan` with the
+  TRUSTED mirror's returns overlaid by angle (`lib/scanmerge.py`; trust = `both` + `/dt/sync_ok`
+  + fresh mirror scan, same rule as the gate) — which Nav2's costmap + collision_monitor obstacle
+  sources read via the launch topic rewrite, so virtual obstacles shape real planning; **AMCL
+  stays on the bare `/scan`** and never sees virtual returns; in `sim_only`/`real_only` it is a
+  verbatim `/scan` pass-through.
   Mirrors `/odom`→`/dt/real_pose` (AMCL map←odom lift), the sim pose→`/dt/sim_pose` (bare `/odom`
   in `sim_only`; **`/sim/ground_truth`** in `both`),
   `/battery_state`→`/dt/health` (synthetic battery in `sim_only`). Owns/publishes the latched
@@ -100,7 +112,7 @@ Nodes:
   latency/battery/safety/mission; the sync banner notes recent resyncs). Subscribes `/dt/*` only.
 - Teleop = stock **`turtlebot3_teleop`** remapped `-r /cmd_vel:=/dt/cmd_vel_raw` (no custom teleop).
 - Pure libs (no ROS, unit-tested):
-  `lib/{geometry,safety,blooms,sync,metrics,pgm,hud,occupancy,trajectory,resync,gzcli}.py`.
+  `lib/{geometry,safety,blooms,sync,metrics,pgm,hud,occupancy,trajectory,resync,gzcli,scanmerge,nav2check}.py`.
 
 ### Modes (`ros2 launch algae_dt bringup.launch.py mode:=...`)
 - `sim_only` (default; the **primary develop/test target** at home): `turtlebot3_gazebo` + Nav2 + our DT layer.
@@ -114,6 +126,16 @@ Nodes:
   Nav2 on Jazzy defaults to plain `Twist`, so we set **`enable_stamped_cmd_vel: true` on Nav2's
   controller/behavior/velocity_smoother via a `params_file`** so it too publishes `TwistStamped`.
   (This matches the course Mini-Project-3 bus; a plain-`Twist` bus breaks stock teleop on Jazzy.)
+  The same launch rewrite also **caps Nav2's plan at the Burger hardware** (`max_vel_x`/
+  `max_speed_xy` → 0.22 — stock burger.yaml plans 0.3 m/s; real wheels saturate vx while wz
+  tracks, bending every fast arc tighter than planned) and sets real-mode collision_monitor
+  `source_timeout` → 1.0 s (0.2 s equals the LDS-02 scan period; Wi-Fi jitter halted autonomy in
+  bursts). The overrides are **CHECKED AND REPAIRED IN via `lib/nav2check`** (replace-or-ADD with
+  path-aware placement; the patched params go to a temp file — RewrittenYaml, which silently
+  no-ops on absent keys, is out of the safety path; the lab's burger.yaml shipping with no
+  `use_sim_time` key, 2026-06-11, is auto-fixed). `nav2check.rewrites_for_mode()` is the single
+  per-mode source of truth shared with the `lab_run.sh` gate. Real modes REFUSE to launch only
+  when no `collision_monitor`/`amcl` section exists to host the chokepoint; `sim_only` warns.
 - Command bus: `/dt/cmd_vel_raw`(TwistStamped) (teleop OR GUI OR Nav2 controller cmd_vel **remapped in
   the launch**) → mediator gates → **`/cmd_vel`(TwistStamped, real) + `/sim/cmd_vel`(type verified)**.
 - Real (bare): `/scan /odom /cmd_vel(TwistStamped) /battery_state /tf`.
@@ -121,7 +143,8 @@ Nodes:
   the sim pose comes from `/sim/ground_truth` — gz PosePublisher ground truth, world==map frame;
   `/sim/odom` still feeds the supervisor's motion/stop-skew detection).
 - Digital (`/dt/*`): `/dt/cmd_vel_raw /dt/real_pose /dt/sim_pose /dt/scan_active /dt/odom_active
-  /dt/sync_error /dt/latency_ms /dt/sync_ok(Bool) /dt/alerts(String) /dt/safety(Bool) /dt/mode(String)
+  /dt/scan_nav(LaserScan — Nav2 obstacle-source feed) /dt/sync_error /dt/latency_ms
+  /dt/sync_ok(Bool) /dt/alerts(String) /dt/safety(Bool) /dt/mode(String)
   /dt/health /dt/estop(Bool,latched) /dt/estop_cmd(Bool, GUI→mediator request) /dt/localized(Bool,
   latched — AMCL map←odom resolved) /dt/resync_cmd(Empty, GUI→twin_resync request)
   /dt/resync_event(String, executed resyncs→CSV+GUI) /dt/battery_override_v(Float64, sim_only demo

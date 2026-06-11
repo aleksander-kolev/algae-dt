@@ -105,3 +105,48 @@ def test_integrate_unicycle_curved_arc():
     assert math.isclose(x, 1.0, abs_tol=1e-9)
     assert math.isclose(y, 1.0, abs_tol=1e-9)
     assert math.isclose(yaw, math.pi / 2, abs_tol=1e-9)
+
+
+# ------------------------------ RTF compensation ----------------------------
+# REGRESSION (lab 2026-06, 'the twin doesn't take the path the real one takes'): the `both` mirror
+# follows the gated commands OPEN-LOOP, but Gazebo integrates them in SIM time. At real-time-factor
+# RTF < 1 a command held for one wall second covers only RTF of the real robot's ground — the
+# mirror under-travels and turns in the wrong places, structurally, until a resync snaps it. The
+# mediator measures RTF from /clock-vs-wall and scales the SIM fan-out by 1/RTF (clamped) so the
+# mirror covers the same ground per WALL second as the real Burger.
+
+def test_rtf_estimate_steady_half_speed():
+    samples = [(0.0, 0.0), (1.0, 0.5), (2.0, 1.0)]   # (wall_s, sim_s)
+    assert math.isclose(S.rtf_estimate(samples), 0.5)
+
+
+def test_rtf_estimate_insufficient_span_is_none():
+    assert S.rtf_estimate([]) is None
+    assert S.rtf_estimate([(0.0, 0.0)]) is None
+    assert S.rtf_estimate([(0.0, 0.0), (0.3, 0.3)]) is None          # < default 0.5 s wall span
+
+
+def test_rtf_estimate_paused_sim_is_none():
+    # A paused sim makes no sim-time progress: no estimate (factor falls back to 1.0), never a
+    # divide-by-zero or a huge bogus factor.
+    assert S.rtf_estimate([(0.0, 5.0), (2.0, 5.0)]) is None
+
+
+def test_rtf_compensation_speeds_up_a_slow_sim_clamped():
+    assert math.isclose(S.rtf_compensation(0.5, max_factor=3.0), 2.0)
+    assert math.isclose(S.rtf_compensation(0.1, max_factor=3.0), 3.0)   # clamped
+
+
+def test_rtf_compensation_slows_a_fast_sim_clamped():
+    assert math.isclose(S.rtf_compensation(2.0, max_factor=3.0), 0.5)
+    assert math.isclose(S.rtf_compensation(10.0, max_factor=3.0), 1.0 / 3.0)   # clamped
+
+
+def test_rtf_compensation_unknown_or_degenerate_is_unity():
+    assert S.rtf_compensation(None, max_factor=3.0) == 1.0
+    assert S.rtf_compensation(0.0, max_factor=3.0) == 1.0
+    assert S.rtf_compensation(-1.0, max_factor=3.0) == 1.0
+
+
+def test_rtf_compensation_at_unity_rtf_is_a_no_op():
+    assert math.isclose(S.rtf_compensation(1.0, max_factor=3.0), 1.0)

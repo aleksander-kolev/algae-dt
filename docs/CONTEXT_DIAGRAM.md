@@ -18,7 +18,8 @@ packages, the operator, the real robot, the sim, and any online source are exter
    │ (turtlebot3_  │ ───────────▶ │  │  fan-IN: /scan /odom /battery /sim/scan   │ │
    │  bringup, Pi) │              │  │  safety gate (25 cm, fail-safe)           │ │
    │               │ ◀─/cmd_vel── │  │  fan-OUT: /cmd_vel(TS) + /sim/cmd_vel     │ │
-   └───────────────┘ (TwistStamped)│  │  mirror→ /dt/real_pose /dt/sim_pose       │ │
+   │               │(TwistStamped)│  │  /dt/scan_nav→ costmaps+collision_monitor │ │
+   └───────────────┘              │  │  mirror→ /dt/real_pose /dt/sim_pose       │ │
                                   │  │  latched /dt/estop                        │ │
    ┌───────────────┐  /sim/scan   │  └───────────┬──────────────────────────────┘ │
    │  SIM BURGER   │  /sim/odom   │              │ /dt/sync_error /dt/latency_ms    │
@@ -39,7 +40,9 @@ packages, the operator, the real robot, the sim, and any online source are exter
 - **In:** real `/scan /odom /battery_state`; sim `/sim/scan /sim/odom` (motion/stop-skew) +
   `/sim/ground_truth` (the `both`-mode `/dt/sim_pose` source — gz PosePublisher, world==map frame);
   operator clicks; (optional) online source.
-- **Out:** `/cmd_vel`(TwistStamped→real), `/sim/cmd_vel`(→sim), gz `set_pose` (twin_resync's
+- **Out:** `/cmd_vel`(TwistStamped→real), `/sim/cmd_vel`(→sim), `/dt/scan_nav`(→Nav2 costmaps +
+  collision_monitor obstacle sources: real scan + trusted-mirror overlay; AMCL keeps `/scan`),
+  gz `set_pose` (twin_resync's
   bounded-drift teleport of the mirror, operator/auto, gated on `/dt/localized`), `/dt/*` state to
   the GUI + CSV.
 - **Single chokepoint:** all motion commands pass through `twin_mediator` (fan-in/fan-out + safety).

@@ -20,6 +20,7 @@ __pycache__/
 *.log
 sync_metrics_*.csv
 .ros/
+lab_logs/
 
 # Secrets — real lab-laptop credentials go in CREDENTIALS.txt (added to the zip manually, never committed)
 CREDENTIALS.txt

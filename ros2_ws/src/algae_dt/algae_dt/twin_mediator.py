@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import functools
 import math
+import time
+from collections import deque
 
 import rclpy
 from geometry_msgs.msg import PoseStamped, TwistStamped
@@ -26,12 +28,13 @@ from rclpy.node import Node
 from rclpy.qos import (DurabilityPolicy, QoSProfile, ReliabilityPolicy,
                        qos_profile_sensor_data)
 from rclpy.time import Time as RclpyTime
+from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import BatteryState, LaserScan
 from std_msgs.msg import Bool, Float64, String
 from tf2_msgs.msg import TFMessage
 from tf2_ros import Buffer, TransformException, TransformListener
 
-from algae_dt.lib import geometry, hud, safety, sync
+from algae_dt.lib import geometry, hud, safety, scanmerge, sync
 from algae_dt.lib.ros_utils import declare_get
 
 INF = float('inf')
@@ -70,6 +73,11 @@ class TwinMediator(Node):
         self.batt_full_v = gp('battery_full_v', 12.6)
         self.sync_source = gp('sim_only_sync_source', 'commanded')   # 'none' disables the shadow real_pose
         self.sim_entity = gp('sim_entity_name', 'burger_sim')        # gz entity of the `both` mirror
+        self.stop_release_m = gp('stop_release_m', 0.35)             # latch hysteresis (lib.safety.BlockLatch)
+        self.stop_release_hold_s = gp('stop_release_hold_s', 0.3)
+        self.rtf_comp_enable = gp('rtf_comp_enable', True)           # both: 1/RTF sim fan-out scaling
+        self.rtf_comp_max = gp('rtf_comp_max', 3.0)
+        self.rtf_window_s = gp('rtf_window_s', 3.0)
 
         self._both = self.mode == 'both'
         self._sim_is_bare = self.mode == 'sim_only'      # the bare robot is the sim
@@ -107,6 +115,13 @@ class TwinMediator(Node):
         self._shadow_anchored = False         # shadow is anchored to the robot's first map pose
         self._T_map_odom = (0.0, 0.0, 0.0)    # map<-odom from AMCL/TF (identity until localized)
         self._start_t = self._now()
+        # Sticky forward-stop (lab 2026-06 'the safety stop doesn't work'): once blocked, forward
+        # stays cut until the front range clears stop_release_m for stop_release_hold_s — rotation
+        # can no longer flicker the ±20° cone empty and lurch-creep past the obstacle. Raises on a
+        # release distance below the stop distance (a silent fix would hide a safety config error).
+        self._latch = safety.BlockLatch(self.stop_distance_m, self.stop_release_m,
+                                        self.stop_release_hold_s)
+        self._clock_samples: deque = deque()  # (wall_s, sim_s) window for the both-mode RTF estimate
 
         # --- publishers ---
         self.pub_cmd = self.create_publisher(TwistStamped, '/cmd_vel', 10)
@@ -114,6 +129,10 @@ class TwinMediator(Node):
         self.pub_real_pose = self.create_publisher(PoseStamped, '/dt/real_pose', 10)
         self.pub_sim_pose = self.create_publisher(PoseStamped, '/dt/sim_pose', 10)
         self.pub_scan_active = self.create_publisher(LaserScan, '/dt/scan_active', qos_profile_sensor_data)
+        # The scan Nav2's OBSTACLE sources consume (costmap layers + collision_monitor; the launch
+        # rewrites their `topic` keys here). Real scan verbatim — except in `both` with a trusted
+        # mirror, where the mirror's returns are overlaid so virtual obstacles get PLANNED around.
+        self.pub_scan_nav = self.create_publisher(LaserScan, '/dt/scan_nav', qos_profile_sensor_data)
         self.pub_odom_active = self.create_publisher(Odometry, '/dt/odom_active', 10)
         self.pub_health = self.create_publisher(BatteryState, '/dt/health', 10)
         self.pub_safety = self.create_publisher(Bool, '/dt/safety', _latched())
@@ -142,6 +161,12 @@ class TwinMediator(Node):
             self.create_subscription(LaserScan, '/sim/scan', self._on_sim_scan, qos_profile_sensor_data)
             self.create_subscription(TFMessage, '/sim/ground_truth', self._on_sim_ground_truth, 10)
             self.create_subscription(Bool, '/dt/sync_ok', self._on_sync_ok, _latched())
+            if self.rtf_comp_enable:
+                # Raw /clock tap (the node itself stays on wall time in `both`): RTF = sim-vs-wall
+                # progress drives the mirror fan-out compensation. BEST_EFFORT matches any clock QoS.
+                self.create_subscription(
+                    Clock, '/clock', self._on_clock,
+                    QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
 
         # --- TF: map<-odom (AMCL) so /dt/*_pose are published in the MAP frame the GUI overlays on ---
         self._tf_buffer = Buffer()
@@ -161,6 +186,7 @@ class TwinMediator(Node):
         self._publish_estop()
         self.get_logger().info(
             f"twin_mediator up: mode={self.mode} stop={self.stop_distance_m} m "
+            f"(release {self.stop_release_m} m sustained {self.stop_release_hold_s}s) "
             f"front_sector={self.front_sector_rad} rad (full width)")
 
     # ------------------------------------------------------------------ utils
@@ -207,6 +233,56 @@ class TwinMediator(Node):
         self._scan = msg
         self._scan_t = self._now()
         self.pub_scan_active.publish(msg)   # /scan is always the active robot's scan
+        self.pub_scan_nav.publish(self._nav_scan(msg))
+
+    def _nav_scan(self, msg: LaserScan) -> LaserScan:
+        """/dt/scan_nav — what Nav2's obstacle sources see (USER GAP, lab 2026-06: 'placing things
+        in the twin doesn't reflect on the robot's nav'). In `both` with a TRUSTED, fresh mirror,
+        overlay the mirror's returns onto the real scan by angle (lib.scanmerge) so a virtual
+        obstacle enters the REAL costmaps and Nav2 plans around it — the same trust rule as the
+        gate (sync_ok), so a diverged mirror can no more poison the costmap than veto motion —
+        PLUS /dt/localized: pre-2D-Pose-Estimate the mirror stands at the origin while the real
+        robot stands anywhere (and sync_ok defaults True), so origin-viewpoint returns would be
+        MARKED into the real costmaps as phantom walls that persist until ray-traced clear; the
+        same pre-AMCL reasoning twin_resync fires behind. AMCL keeps the bare /scan (its
+        `scan_topic` key is untouched by the launch rewrite): localization must never see
+        virtual returns. Everywhere else: verbatim pass-through."""
+        if not (self._both and self._sync_ok and self._localized and self._sim_scan is not None
+                and (self._now() - self._sim_scan_t) <= self.sim_max_data_age_s):
+            return msg
+        sim = self._sim_scan
+        merged = LaserScan()
+        merged.header = msg.header
+        merged.angle_min = msg.angle_min
+        merged.angle_max = msg.angle_max
+        merged.angle_increment = msg.angle_increment
+        merged.time_increment = msg.time_increment
+        merged.scan_time = msg.scan_time
+        merged.range_min = msg.range_min
+        merged.range_max = msg.range_max
+        merged.ranges = scanmerge.merge_ranges(
+            msg.ranges, msg.angle_min, msg.angle_increment,
+            sim.ranges, sim.angle_min, sim.angle_increment,
+            sim_range_min=max(sim.range_min, self.range_min) if sim.range_min > 0.0 else self.range_min,
+            sim_range_max=min(sim.range_max, self.range_max) if sim.range_max > 0.0 else self.range_max,
+            real_range_min=msg.range_min,
+            real_range_max=msg.range_max if msg.range_max > 0.0 else self.range_max)
+        return merged
+
+    def _on_clock(self, msg: Clock) -> None:
+        wall = time.monotonic()
+        self._clock_samples.append((wall, msg.clock.sec + msg.clock.nanosec * 1e-9))
+        while self._clock_samples and (wall - self._clock_samples[0][0]) > self.rtf_window_s:
+            self._clock_samples.popleft()
+
+    def _sim_fanout_factor(self) -> float:
+        """clamp(1/RTF) for the `both` mirror fan-out (lib.sync): gz integrates /sim/cmd_vel in
+        SIM time, so at RTF<1 the open-loop mirror under-travels per wall second and turns in the
+        wrong places ('the twin doesn't take the path the real one takes', lab 2026-06). 1.0
+        whenever RTF is unknown — and ~1.0 on a healthy lab GPU, where this is a no-op."""
+        if not self._clock_samples:
+            return 1.0
+        return sync.rtf_compensation(sync.rtf_estimate(self._clock_samples), self.rtf_comp_max)
 
     def _on_sim_scan(self, msg: LaserScan) -> None:
         self._sim_scan = msg
@@ -320,8 +396,11 @@ class TwinMediator(Node):
         # fail-safe-block either (no data ≠ danger when the data describes the wrong place).
         mirror = (self._scan_status(self._sim_scan, self._sim_scan_t, now)
                   if self._both and self._sync_ok else safety.ScanStatus(False, INF, 0.0))
-        blocked = safety.gate(active, mirror, self.stop_distance_m, self.max_data_age_s,
-                              sim_max_data_age_s=self.sim_max_data_age_s)
+        # Sticky stop: the latch consumes the combined considered range (same fail-safe gating as
+        # gate()) and releases only after a sustained clearance — see lib.safety.BlockLatch.
+        blocked = self._latch.update(
+            safety.combined_range(active, mirror, self.max_data_age_s,
+                                  sim_max_data_age_s=self.sim_max_data_age_s), now)
 
         if self._last_cmd is None or (now - self._last_cmd_t) > self.max_cmd_age_s:
             base_vx, base_wz = 0.0, 0.0   # watchdog: bus silent -> stop
@@ -339,7 +418,17 @@ class TwinMediator(Node):
         out.twist.angular.z = wz
         self.pub_cmd.publish(out)
         if self.pub_cmd_sim is not None:
-            self.pub_cmd_sim.publish(out)
+            f = self._sim_fanout_factor()
+            if f == 1.0:
+                self.pub_cmd_sim.publish(out)
+            else:
+                # Separate message on purpose: the REAL command must never carry the sim scaling.
+                sim_out = TwistStamped()
+                sim_out.header.stamp = out.header.stamp
+                sim_out.header.frame_id = out.header.frame_id
+                sim_out.twist.linear.x = vx * f
+                sim_out.twist.angular.z = wz * f
+                self.pub_cmd_sim.publish(sim_out)
 
         self.pub_safety.publish(Bool(data=blocked))
         self._integrate_shadow(vx, wz, now)

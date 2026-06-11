@@ -9,6 +9,8 @@ These tests pin the behaviours the mediator depends on:
 """
 import math
 
+import pytest
+
 from algae_dt.lib import safety
 
 INF = float('inf')
@@ -211,8 +213,11 @@ def test_limit_command_nan_velocity_fails_to_stop_not_full_throttle():
 
 
 def test_limit_command_finite_still_clamps_normally():
-    assert safety.limit_command(0.5, 9.0, blocked=False, estop=False,
-                                max_linear=0.22, max_angular=2.0) == (0.22, 2.0)
+    # Over-limit commands scale BOTH components by ONE factor (curvature preserved, see the
+    # dedicated test below). Here angular is the binding limit: s = 2.0/9.0.
+    vx, wz = safety.limit_command(0.5, 9.0, blocked=False, estop=False,
+                                  max_linear=0.22, max_angular=2.0)
+    assert math.isclose(wz, 2.0) and math.isclose(vx, 0.5 * (2.0 / 9.0))
     assert safety.limit_command(0.5, 0.0, blocked=True, estop=False,
                                 max_linear=0.22, max_angular=2.0) == (0.0, 0.0)
 
@@ -270,13 +275,29 @@ def test_limit_command_estop_zeros_everything():
                                  max_linear=0.22, max_angular=2.0) == (0.0, 0.0)
 
 
-def test_limit_command_clamps_to_limits():
+def test_limit_command_clamps_to_limits_preserving_curvature():
+    """REGRESSION (lab 2026-06, 'doesn't follow the RViz path / strange turns'): clamping vx alone
+    while wz passed through CHANGED the commanded curvature wz/vx — stock burger.yaml plans up to
+    0.3 m/s, the Burger ceiling is 0.22, so every saturated arc was executed ~36% tighter than DWB
+    planned (wall-hugging, weaving on real hardware; the ideal-motor sim never saturates and hid
+    it). One shared scale factor now caps both components: the arc geometry is preserved and only
+    the speed along it drops; the output still never exceeds either limit."""
     vx, wz = safety.limit_command(1.0, 5.0, blocked=False, estop=False,
                                   max_linear=0.22, max_angular=2.0)
-    assert vx == 0.22 and wz == 2.0
+    assert math.isclose(vx, 0.22) and math.isclose(wz, 1.1)   # s = 0.22/1.0 binds
+    assert math.isclose(wz / vx, 5.0 / 1.0)                   # curvature wz/vx preserved
     vx, wz = safety.limit_command(-1.0, -5.0, blocked=False, estop=False,
                                   max_linear=0.22, max_angular=2.0)
-    assert vx == -0.22 and wz == -2.0
+    assert math.isclose(vx, -0.22) and math.isclose(wz, -1.1)
+
+
+def test_limit_command_within_limits_is_never_rescaled():
+    # The factor only ever REDUCES an over-limit command; in-spec commands pass through bit-exact
+    # (Nav2's planned (0.22, 1.0)-class commands must not be touched).
+    assert safety.limit_command(0.22, 1.0, blocked=False, estop=False,
+                                max_linear=0.22, max_angular=2.84) == (0.22, 1.0)
+    assert safety.limit_command(0.0, 2.8, blocked=False, estop=False,
+                                max_linear=0.22, max_angular=2.84) == (0.0, 2.8)
 
 
 def test_limit_command_blocked_zeros_forward_keeps_rotation():
@@ -296,3 +317,80 @@ def test_limit_command_clear_passes_through():
     vx, wz = safety.limit_command(0.1, 0.5, blocked=False, estop=False,
                                   max_linear=0.22, max_angular=2.0)
     assert vx == 0.1 and wz == 0.5
+
+
+# ------------------------- combined_range + BlockLatch -----------------------
+# REGRESSION (lab 2026-06, 'the safety stop doesn't work'): the gate zeroes only FORWARD motion
+# while rotation passes (course rule: rotate/back-up stay allowed). Under a live Nav2 goal, DWB
+# keeps commanding arcs; rotating swings the obstacle out of the ±20° front cone, the instant the
+# cone reads clear forward re-enables, the robot LURCHES, the obstacle re-enters the cone, blocks
+# again… net effect: a stuttering CREEP past the obstacle instead of a visible stop. The latch
+# makes the stop sticky: once blocked it releases only after the front range stays beyond a
+# release distance (> stop) for a sustained hold — flicker-free, but never blocks on startup.
+
+def test_combined_range_is_min_of_considered_worlds():
+    real = _status(front_min=0.40, age_s=0.1)
+    sim = _status(front_min=0.30, age_s=0.1)
+    assert math.isclose(safety.combined_range(real, sim, max_data_age_s=1.0), 0.30)
+    # Staleness still fail-safes through the combined range (stale world -> 0.0).
+    stale = _status(front_min=3.0, age_s=5.0)
+    assert safety.combined_range(real, stale, max_data_age_s=1.0) == 0.0
+
+
+def test_gate_and_combined_range_agree():
+    real = _status(front_min=0.20)
+    sim = _status(has_data=False)
+    rng = safety.combined_range(real, sim, max_data_age_s=1.0)
+    assert safety.is_blocked(rng, 0.25) is safety.gate(real, sim, 0.25, 1.0) is True
+
+
+def test_block_latch_blocks_immediately_below_stop():
+    latch = safety.BlockLatch(stop_distance_m=0.25, release_distance_m=0.35, release_hold_s=0.3)
+    assert latch.update(3.0, now_s=0.0) is False     # clear path: no block
+    assert latch.update(0.20, now_s=0.1) is True     # obstacle inside 25 cm: block at once
+
+
+def test_block_latch_holds_through_hysteresis_band():
+    # 0.25..0.35 m is the hysteresis band: NOT enough to release (a flickering cone sits here).
+    latch = safety.BlockLatch(0.25, 0.35, 0.3)
+    latch.update(0.20, now_s=0.0)
+    assert latch.update(0.30, now_s=1.0) is True     # nominally past stop, still held
+    assert latch.update(0.30, now_s=9.0) is True     # band never starts the release clock
+
+
+def test_block_latch_requires_sustained_clearance():
+    latch = safety.BlockLatch(0.25, 0.35, 0.3)
+    latch.update(0.20, now_s=0.0)                    # block
+    assert latch.update(3.0, now_s=0.1) is True      # clear, but hold not yet elapsed
+    assert latch.update(3.0, now_s=0.39) is True     # 0.29 s of clearance: still held
+    assert latch.update(3.0, now_s=0.45) is False    # >= 0.3 s sustained: released
+
+
+def test_block_latch_reblocks_and_resets_the_hold_clock():
+    latch = safety.BlockLatch(0.25, 0.35, 0.3)
+    latch.update(0.20, now_s=0.0)
+    latch.update(3.0, now_s=0.2)                     # clearing…
+    latch.update(0.20, now_s=0.25)                   # obstacle back: re-block, reset clock
+    assert latch.update(3.0, now_s=0.5) is True      # clearance clock restarts HERE
+    assert latch.update(3.0, now_s=0.79) is True     # 0.29 s since the restart: still held
+    assert latch.update(3.0, now_s=0.81) is False    # 0.31 s sustained: released
+
+
+def test_block_latch_stale_scan_blocks_and_recovers_like_an_obstacle():
+    # A stale considered-scan arrives here as 0.0 (fail-safe) -> latches; recovery is sustained.
+    latch = safety.BlockLatch(0.25, 0.35, 0.3)
+    assert latch.update(0.0, now_s=0.0) is True
+    assert latch.update(3.0, now_s=0.1) is True
+    assert latch.update(3.0, now_s=0.5) is False
+
+
+def test_block_latch_never_blocks_on_startup_inf():
+    # Startup no-data is +inf (RULES §B-5: stays unblocked so the robot can warm up).
+    latch = safety.BlockLatch(0.25, 0.35, 0.3)
+    assert latch.update(INF, now_s=0.0) is False
+    assert latch.update(INF, now_s=10.0) is False
+
+
+def test_block_latch_validates_release_distance():
+    with pytest.raises(ValueError):
+        safety.BlockLatch(stop_distance_m=0.25, release_distance_m=0.20, release_hold_s=0.3)

@@ -207,6 +207,57 @@ Confirmed before implementation:
   Also beware the path itself — `turtlebot3_ws (Copy)` contains a space, which half the ROS
   tooling can't take. Automated end-to-end by `scripts/lab_fix_workspace.sh` (tested by
   `scripts/test_lab_fix_workspace.sh`, container suite incl. foreign-owned + mode-000 files).
+- **Stock Nav2 params can out-plan the hardware.** Stock `burger.yaml` lets DWB plan 0.3 m/s but
+  the Burger wheel ceiling is ~0.22: the real wheels saturate vx while wz keeps tracking, so
+  every fast arc executes TIGHTER than planned — "doesn't follow the RViz path", strange turns,
+  wall-hugging. The ideal-motor sim never saturates, so home runs look perfect and the bug exists
+  only on hardware. Rule: cap the PLAN at the hardware (the launch rewrites
+  `max_vel_x`/`max_speed_xy` to 0.22) AND clamp curvature-preserving — `lib/safety.limit_command`
+  scales (vx, wz) by ONE shared factor; independent per-component clamps bend the arc exactly
+  like the saturation did.
+- **`RewrittenYaml` no-ops silently on missing keys — so REPAIR, don't rewrite.** `param_rewrites`
+  only replaces keys that already EXIST; a missing key is a silent no-op, and the lab's
+  source-built `turtlebot3_navigation2` is unpinned. PROVEN LIVE (lab, 2026-06-11): its
+  burger.yaml has NO `use_sim_time` key anywhere — harmless in itself, yet a one-tier
+  "missing key = refuse" preflight blocked a perfectly safe demo at the door, while the worst
+  case (a missing `cmd_vel_out_topic` leaving Nav2 publishing straight to `/cmd_vel`, UNGATED)
+  is the one that must never pass. Rule: `lib/nav2check.repair_nav2_params()` now
+  replaces-or-ADDS every override with path-aware placement (use_sim_time on every node, speed
+  caps under FollowPath, `topic` on every observation source, the chokepoint reroute, the
+  TwistStamped chain enforced); the launch dumps the patched dict to a temp file and hands THAT
+  to nav2_bringup — RewrittenYaml is out of the safety path. `nav2check.rewrites_for_mode()` is
+  the single per-mode source of truth shared by the launch AND the `lab_run.sh` CLI gate (the
+  two disagreed that same lab day: CLI said OK, launch refused). Real modes still REFUSE only
+  when there is genuinely no home for the chokepoint (no `collision_monitor`/`amcl` section);
+  anything else is a named, non-fatal degradation warning.
+- **The lab clones the DEFAULT branch.** Docs say plain `git clone`, so the 2026-06 session
+  checked out a default branch months behind `feat/poc-implementation` and demoed code WITHOUT
+  the already-landed fixes — no twin_resync, mirror phantom-braking, the un-derated spray — and
+  re-hit every already-fixed bug. Rule: the deployed branch must carry the fixes BEFORE a session
+  (keeping it current is part of the fix itself); `lab_run.sh` prints the demoed commit — READ it
+  before drawing any conclusion from lab behaviour.
+- **A forward-only stop + allowed rotation = lurch-creep.** The gate zeroes only forward motion
+  while rotation stays allowed (course rule), so under a live Nav2 goal DWB rotates, the obstacle
+  swings out of the ±20° front cone, forward re-enables for an instant, and the robot creeps past
+  the box in lurches ("the safety stop doesn't work"). Rule: latch the block
+  (`lib/safety.BlockLatch`) — once blocked, forward stays cut until the front range exceeds the
+  release hysteresis (`stop_release_m`, 0.35 m) CONTINUOUSLY for `stop_release_hold_s` (0.3 s),
+  never on one clear reading; rotation/back-up stay allowed, startup no-data still never blocks.
+- **An open-loop mirror under-travels at RTF < 1.** Gazebo integrates `/sim/cmd_vel` in SIM time,
+  so at real-time-factor < 1 the mirror travels less per wall second than the real robot — the
+  twin turns in the wrong places STRUCTURALLY, and resync alone just teleports it back again and
+  again. Rule: measure RTF from /clock-vs-wall (`lib/sync.rtf_estimate`) and scale ONLY the sim
+  fan-out by clamp(1/RTF) (`lib/sync.rtf_compensation`; params `rtf_comp_enable`/`rtf_comp_max`/
+  `rtf_window_s`; no-op at RTF ≈ 1). And when overlaying the mirror's scan onto the real one
+  (`lib/scanmerge.py` → `/dt/scan_nav`), merge by ANGLE, not index — the LDS-02 starts at 0,
+  gz at -π.
+- **collision_monitor's per-source `source_timeout` (0.2 s) == the LDS-02 scan period.** A
+  staleness budget equal to the scan period has ZERO headroom: any Wi-Fi jitter makes a scan
+  "late", collision_monitor declares the source invalid, and autonomy halts in bursts — a
+  stop-and-go stutter that reads as bad tuning. Rule: real modes (real_only / lab `both`) rewrite
+  `source_timeout` to 1.0 s, the documented real-scan staleness budget (== twin.yaml
+  `max_data_age_s`), so ONE budget governs everywhere; the 25 cm mediator gate stays the tight
+  last-second net.
 
 ## TA-familiar fallback: the manual multi-terminal launch
 If a combined `bringup.launch.py` misbehaves in the lab, fall back to the course's per-component

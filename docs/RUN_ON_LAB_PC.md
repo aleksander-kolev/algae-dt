@@ -121,6 +121,13 @@ the arena, so the real start never matches the origin — you must tell AMCL the
    failure. (Resync is **gated on localization**: clicks before the pose estimate queue safely and
    execute once AMCL resolves — the pre-seed pose has no map meaning, so nothing fires on it.)
 
+**Virtual obstacles steer REAL nav:** placing an obstacle in the Gazebo twin now also enters the
+REAL robot's costmaps — the mediator overlays the trusted mirror's returns onto the real scan as
+`/dt/scan_nav`, which Nav2's costmaps read. This holds **only while the SYNC banner is green**
+(same trust rule as the safety gate; a diverged mirror is ignored). Expect real Nav2 to visibly
+replan around a box that exists only in the twin — a demo beat, show it. AMCL stays on the bare
+real `/scan`, so localization never sees virtual returns.
+
 ## Prerequisites (the script errors clearly if any fail)
 - **A healthy native workspace + runtime deps** — the §0 checklist: `turtlebot3_*` from
   `~/turtlebot3_ws/install`, `nav2_bringup`/`nav2_common`/`nav2_simple_commander`,
@@ -141,19 +148,44 @@ the arena, so the real start never matches the origin — you must tell AMCL the
   battery under load (`ros2 topic echo /battery_state --field voltage`, want ≥ ~11.5 V) and, on
   the Pi, that commands arrive (`ros2 topic hz /cmd_vel`). The skipped bloom + "spray stalled"
   alert in the console/CSV is the honest record of the failed attempt.
-- **Nav hesitant / weaving / grazing walls:** first re-do the 2D Pose Estimate until the scan hugs
-  the walls (mislocalization explains most "buggy nav"). Then tune inflation at runtime, no
-  rebuild:
+- **Nav hesitant / weaving / grazing walls:** FIRST `ros2 topic info -v /cmd_vel` — it must show
+  **exactly ONE publisher: twin_mediator**. Two or more = Nav2 is bypassing the safety bus
+  (burger.yaml lost the chokepoint keys; the nav2check preflight should have refused with exit 6 —
+  stop and fix, don't demo ungated). Then re-do the 2D Pose Estimate until the scan hugs the walls
+  (mislocalization explains most "buggy nav"). Nav speed is now capped at the hardware 0.22 m/s, so
+  the plan is achievable — expect calmer, truer-to-RViz driving than the 2026-06 session. Then tune
+  inflation at runtime, no rebuild:
   `ros2 param set /global_costmap/global_costmap inflation_layer.inflation_radius 0.25` (and the
   same on `/local_costmap/local_costmap`), then clear both costmaps
   (`ros2 service call /global_costmap/clear_entirely_global_costmap nav2_msgs/srv/ClearEntireCostmap`,
   same for local). Params reset on a Nav2 restart.
+- **Robot stops at an obstacle and "won't go":** that's the latch, not a bug. The 25 cm safety
+  stop now **LATCHES** — once forward motion is cut it stays cut until the front cone reads beyond
+  **0.35 m for 0.3 s sustained** (`stop_release_m` / `stop_release_hold_s` in twin.yaml). No more
+  lurch-creeping past the box while Nav2 rotates the obstacle out of the cone. Rotation and backing
+  up still work while latched — back off or clear the obstacle and it releases on its own.
+
+## Evidence & debugging (recorded by default)
+Every `lab_run.sh` run records into `~/turtlebot3_ws/lab_logs/<UTCstamp>_<gitref>/`:
+`console.log` (tee of the launch console), `bag/` (ros2 bag of `/dt/*`, the Nav2 plans + cmd_vel
+chain, scans, TF, `/rosout`, `/sim/*`), `ros/` (per-node ROS logs), and the supervisor's
+`sync_metrics_*.csv`. `--no-log` disables. Post-mortem at home: `ros2 bag info <dir>/bag`, then
+`ros2 bag play <dir>/bag` and replay the incident. **Copy the run folder to USB/OneDrive before
+leaving — the laptop can be wiped.**
+
+**lab_run.sh exits with code 6** = even after AUTO-REPAIR the `turtlebot3_navigation2` params
+file cannot host the safety chokepoint (no `collision_monitor`/`amcl` section at all → Nav2
+would drive the real robot PAST the safety gate). Ordinary differences are NOT fatal: the
+launch now repairs the stock file in memory — replacing or ADDING every override (the lab's
+burger.yaml shipping with no `use_sim_time` key, found 2026-06-11, is auto-fixed) — and prints
+each repair it applied. Remedy for a genuine 6: update `~/turtlebot3_ws/src` turtlebot3 (jazzy
+branch) + rebuild, or demo with `--sim`. Do NOT hand-edit the check away.
 
 ## Before you leave (every session — the laptop can be wiped without notice)
 1. Commit + push anything you changed: `git add -A && git commit -m "lab session" && git push`
    (no network? copy the repo + workspace changes to the **USB stick**).
-2. Copy evidence off the machine: the sync supervisor's `sync_metrics_*.csv` (path printed in its
-   console log), screenshots/recordings → USB / OneDrive.
+2. Copy evidence off the machine: the whole `~/turtlebot3_ws/lab_logs/<stamp>_<ref>/` run folder
+   (console + bag + ROS logs + sync CSV — §Evidence above), screenshots/recordings → USB / OneDrive.
 3. If `~/turtlebot3_ws` changed in a way worth keeping, refresh the **fail-safe zip** in
    OneDrive/USB (zip the workspace, or at minimum its `src/`) — it is the §0 recovery source.
 4. Robot already shut down (`sudo shutdown now` on the Pi, then the switch).

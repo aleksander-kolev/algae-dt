@@ -97,20 +97,47 @@ class ScanStatus:
 
 def limit_command(vx: float, wz: float, *, blocked: bool, estop: bool,
                   max_linear: float, max_angular: float) -> tuple[float, float]:
-    """Shape one commanded (vx, wz) for output: full-stop on E-STOP, clamp to the Burger limits,
-    and zero FORWARD motion when the safety gate blocks (rotation and reverse still allowed).
+    """Shape one commanded (vx, wz) for output: full-stop on E-STOP, cap to the Burger limits with
+    ONE shared scale factor (curvature preserved), and zero FORWARD motion when the safety gate
+    blocks (rotation and reverse still allowed).
 
-    FAIL-SAFE on a non-finite command: `min(max_linear, NaN)` returns `max_linear` and
-    `max(-max_linear, max_linear)` returns `max_linear`, so an unvalidated NaN/inf from a degenerate
-    Nav2 plan or a teleop glitch would be AMPLIFIED to FULL throttle when the gate is clear. A
-    garbage command must STOP the robot, never drive it — treat any non-finite component as estop."""
+    CURVATURE-PRESERVING CAP (lab 2026-06, 'doesn't follow the RViz path / strange turns'): stock
+    burger.yaml lets DWB plan up to 0.3 m/s but the Burger wheel ceiling is 0.22. Clamping vx alone
+    while wz passed through changed the commanded curvature wz/vx, so every saturated arc was
+    executed ~36% TIGHTER than planned — the real robot wove and hugged walls while the ideal-motor
+    sim tracked perfectly (which is why home runs never showed it). Scaling both components by the
+    same factor keeps the planned arc geometry; only the speed along it drops, and the output still
+    never exceeds either limit. In-spec commands pass through bit-exact.
+
+    FAIL-SAFE on a non-finite command: with the old independent min/max clamps an unvalidated
+    NaN/inf from a degenerate Nav2 plan or a teleop glitch was AMPLIFIED to FULL throttle when the
+    gate was clear. A garbage command must STOP the robot, never drive it — treat any non-finite
+    component as estop."""
     if estop or not (math.isfinite(vx) and math.isfinite(wz)):
         return 0.0, 0.0
-    vx = max(-max_linear, min(max_linear, vx))
-    wz = max(-max_angular, min(max_angular, wz))
+    scale = 1.0
+    if abs(vx) > max_linear:
+        scale = min(scale, max_linear / abs(vx))
+    if abs(wz) > max_angular:
+        scale = min(scale, max_angular / abs(wz))
+    scale = max(0.0, scale)   # a degenerate (<=0) limit stops rather than sign-flips
+    vx *= scale
+    wz *= scale
     if blocked and vx > 0.0:
         vx = 0.0
     return vx, wz
+
+
+def combined_range(real: ScanStatus, sim: ScanStatus, max_data_age_s: float,
+                   sim_max_data_age_s: float | None = None) -> float:
+    """The single controlling front range of the dual-LiDAR twin: each world is staleness-gated
+    independently (fail-safe: stale considered-scan -> 0.0, startup no-data -> +inf), then
+    OR-combined (min across worlds). gate() is is_blocked() of this; the mediator's BlockLatch
+    consumes the range itself so its hysteresis applies across worlds and staleness alike."""
+    cr = considered_range(real.front_min, real.has_data, real.age_s, max_data_age_s)
+    cs = considered_range(sim.front_min, sim.has_data, sim.age_s,
+                          sim_max_data_age_s if sim_max_data_age_s is not None else max_data_age_s)
+    return combine(cr, cs)
 
 
 def gate(real: ScanStatus, sim: ScanStatus,
@@ -127,7 +154,54 @@ def gate(real: ScanStatus, sim: ScanStatus,
     delayed sim frame past the real 1.0 s budget would otherwise nuisance-stop the REAL robot.
     The real (safety-critical) scan keeps the tight budget.
     """
-    cr = considered_range(real.front_min, real.has_data, real.age_s, max_data_age_s)
-    cs = considered_range(sim.front_min, sim.has_data, sim.age_s,
-                          sim_max_data_age_s if sim_max_data_age_s is not None else max_data_age_s)
-    return is_blocked(combine(cr, cs), stop_distance_m)
+    return is_blocked(combined_range(real, sim, max_data_age_s, sim_max_data_age_s),
+                      stop_distance_m)
+
+
+class BlockLatch:
+    """Sticky forward-stop release (lab 2026-06, 'the safety stop doesn't work').
+
+    The gate zeroes only FORWARD motion; rotation stays allowed (course rule: rotate/back-up must
+    keep working). But under a live Nav2 goal DWB keeps commanding arcs: rotation swings the
+    obstacle out of the ±20° front cone, the cone reads clear for an instant, forward re-enables,
+    the robot lurches, the obstacle re-enters the cone, blocks again — a stuttering CREEP past the
+    obstacle instead of a visible stop. This latch makes the block sticky: it engages the moment
+    the combined considered range drops below `stop_distance_m` and releases only after the range
+    has stayed at/beyond `release_distance_m` (> stop: a hysteresis band) for `release_hold_s`
+    CONTINUOUSLY. Startup +inf never engages it (RULES §B-5: no-data stays unblocked).
+
+    Mutable BY DESIGN — it is a time latch, the one piece of state the gate needs; the mediator
+    owns one instance exactly like its message caches. Transitions are pure + unit-tested.
+    """
+
+    def __init__(self, stop_distance_m: float, release_distance_m: float,
+                 release_hold_s: float) -> None:
+        if release_distance_m < stop_distance_m:
+            raise ValueError(
+                f"release_distance_m ({release_distance_m}) must be >= stop_distance_m "
+                f"({stop_distance_m}) — a release inside the stop band would defeat the latch")
+        self._stop = stop_distance_m
+        self._release = release_distance_m
+        self._hold = release_hold_s
+        self._blocked = False
+        self._clear_since: float | None = None
+
+    @property
+    def blocked(self) -> bool:
+        return self._blocked
+
+    def update(self, considered_range_m: float, now_s: float) -> bool:
+        """Advance the latch with this tick's combined considered range; returns blocked."""
+        if considered_range_m < self._stop:
+            self._blocked = True
+            self._clear_since = None
+        elif self._blocked:
+            if considered_range_m >= self._release:
+                if self._clear_since is None or now_s < self._clear_since:
+                    self._clear_since = now_s            # (re)start; tolerate clock jumps back
+                elif (now_s - self._clear_since) >= self._hold:
+                    self._blocked = False
+                    self._clear_since = None
+            else:
+                self._clear_since = None                 # hysteresis band: not clear enough
+        return self._blocked
