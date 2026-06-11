@@ -196,6 +196,12 @@ def launch_setup(context, *args, **kwargs):
         # flow. source_timeout matches sim_only: the home rig is the same throttled environment.
         rewrites['set_initial_pose'] = 'True'
         rewrites['source_timeout'] = '2.0'
+        # TF freshness margin for the throttled home rig: AMCL re-stamps map->odom per processed
+        # scan, so any scan-delivery hiccup under load let the transform go stale past the stock
+        # 0.2-0.3 s tolerances and Nav2's controller aborted mid-goal with "Transform data too old
+        # ... odom to map" -> bloom skipped in seconds (looked like an instant fake completion).
+        # The fake robot's odom is exact (kinematic), so a longer-lived map->odom costs nothing.
+        rewrites['transform_tolerance'] = '2.0'
     nav2_params = RewrittenYaml(
         source_file=_src('turtlebot3_navigation2', 'param', 'burger.yaml'),
         param_rewrites=rewrites, convert_types=True)

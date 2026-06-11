@@ -201,14 +201,37 @@ def test_success_sprays_and_marks_treated():
         _teardown(runner, har, ex)
 
 
-def test_nav_failure_skips_without_spraying():
+def test_nav_failure_skips_loudly_with_partial_summary():
+    """A failed nav must (1) skip without spraying, (2) raise an operator-visible /dt/alerts line
+    naming the bloom, and (3) end in the PARTIAL summary state ('complete (0 treated, 1 skipped)')
+    — never a bare 'complete'. An operator watched a nav-failed mission report 'complete' and
+    reasonably concluded the twin faked a mission; partial outcomes must be loud and explicit."""
+    from std_msgs.msg import String as _String
     runner, har, ex = _build(FakeNavigator([TaskResult.FAILED]), [(0.1, 0.0)])
+    alerts = []
+    har.create_subscription(_String, '/dt/alerts', lambda m: alerts.append(m.data), 10)
+    try:
+        assert _spin_until(ex, lambda: len(_markers_by_id(har)) == 1)
+        har.send('start')
+        assert _spin_until(ex, lambda: har.last_state == 'complete (0 treated, 1 skipped)'), \
+            f"partial mission must publish the summary state, got {har.last_state!r}"
+        assert _markers_by_id(har) == {0: B.SKIPPED}
+        assert har.max_omega == 0.0, "a failed nav must NOT spray"
+        assert any('BLOOM 0 SKIPPED' in a for a in alerts), \
+            f"a skip must raise an operator-visible alert, got {alerts}"
+    finally:
+        _teardown(runner, har, ex)
+
+
+def test_all_treated_mission_stays_plain_complete():
+    """The clean path keeps the plain 'complete' state — the summary wording is reserved for
+    partial outcomes so a fully successful mission never reads as qualified."""
+    runner, har, ex = _build(FakeNavigator([TaskResult.SUCCEEDED]), [(0.1, 0.0)])
     try:
         assert _spin_until(ex, lambda: len(_markers_by_id(har)) == 1)
         har.send('start')
         assert _spin_until(ex, lambda: har.last_state == 'complete')
-        assert _markers_by_id(har) == {0: B.SKIPPED}
-        assert har.max_omega == 0.0, "a failed nav must NOT spray"
+        assert _markers_by_id(har) == {0: B.TREATED}
     finally:
         _teardown(runner, har, ex)
 
@@ -259,7 +282,7 @@ def test_gross_arrival_far_pose_skips_in_sim_only():
     try:
         assert _spin_until(ex, lambda: len(_markers_by_id(har)) == 1)
         har.send('start')
-        assert _spin_until(ex, lambda: har.last_state == 'complete')
+        assert _spin_until(ex, lambda: (har.last_state or '').startswith('complete'))
         assert _markers_by_id(har) == {0: B.SKIPPED}, "SUCCEEDED + far gross-pose -> skipped, not treated"
         assert har.max_omega == 0.0
     finally:
@@ -274,7 +297,7 @@ def test_start_after_completion_retries_skipped_bloom():
         assert _spin_until(ex, lambda: len(_markers_by_id(har)) == 1)
         har.send('start')
         assert _spin_until(ex, lambda: _markers_by_id(har).get(0) == B.SKIPPED), "first attempt -> skipped"
-        assert _spin_until(ex, lambda: har.last_state == 'complete')
+        assert _spin_until(ex, lambda: (har.last_state or '').startswith('complete'))
         har.send('start')                                    # retry
         assert _spin_until(ex, lambda: _markers_by_id(har).get(0) == B.TREATED), \
             "a fresh Start after completion must retry the skipped bloom (which now succeeds)"
@@ -308,7 +331,7 @@ def test_rejected_goal_skips_without_stale_success():
     try:
         assert _spin_until(ex, lambda: len(_markers_by_id(har)) == 1)
         har.send('start')
-        assert _spin_until(ex, lambda: har.last_state == 'complete')
+        assert _spin_until(ex, lambda: (har.last_state or '').startswith('complete'))
         assert _markers_by_id(har) == {0: B.SKIPPED}, "rejected goal -> skipped, never treated"
         assert har.max_omega == 0.0, "a rejected goal must NOT spray"
     finally:
@@ -460,7 +483,7 @@ def test_spray_backstop_stall_skips_without_marking_treated():
     try:
         assert _spin_until(ex, lambda: len(_markers_by_id(har)) == 1)
         har.send('start')
-        assert _spin_until(ex, lambda: har.last_state == 'complete', secs=12), \
+        assert _spin_until(ex, lambda: (har.last_state or '').startswith('complete'), secs=12), \
             "mission must end (no infinite re-spray of a stalled bloom)"
         assert _markers_by_id(har) == {0: B.SKIPPED}, "a stalled spray must skip, never mark treated"
         assert har.max_omega > 0.0, "the spin was actually attempted before the backstop fired"

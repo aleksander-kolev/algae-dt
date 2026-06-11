@@ -177,6 +177,16 @@ downloads — our nodes are exactly pub/sub built on this primitive), ROS 2 topi
   phantom failures). TDD: raycast suite in `test_occupancy.py` + the map-scan test in
   `test_fake_robot.py`; gates: ci.sh 247 green, both_smoke (Nav2 "Managed nodes are active" in
   both+fake now), sim_smoke unregressed.
+- [x] **T7.3** Loud partial missions + scan perf (the "mission completed but nothing ran" report).
+  Forensics: the Nav2 goal died 0.3 s BEFORE the auto-resync fired (log timestamps) — cause was
+  TF starvation: the 360-beam pure-python raycast overran the 0.2 s scan period on the loaded
+  home rig, AMCL's map->odom went ~0.5 s stale, the controller aborted ("Transform data too old"),
+  the bloom was honestly skipped and the mission reported a bare 'complete' that READ as a fake
+  success. Fixes: 180-beam default + stationary scan cache (idle = zero march cost);
+  `transform_tolerance: 2.0` rewrite in both+fake (exact kinematic odom -> a long-lived map->odom
+  costs nothing); mission_runner now publishes `BLOOM n SKIPPED (…)` on /dt/alerts and ends in
+  `complete (N treated, M skipped)` (plain 'complete' reserved for all-treated); the GUI mission
+  banner paints AMBER on any partial completion. Gates: ci.sh 250 green, both_smoke, sim_smoke.
 
 ---
 

@@ -384,7 +384,9 @@ def _make_window(bridge: GuiBridge):
             shadow = "  (green = commanded shadow)" if b.mode == 'sim_only' else ""
             self._set('mode', f"MODE: {b.mode}{shadow}" + ("  — DT LINK LOST" if link_lost else ""),
                       'amber' if link_lost else 'green')
-            self._set('mission', f"MISSION: {b.mission_state}", 'green')
+            # a partial completion ('complete (1 treated, 2 skipped)') must not paint success-green
+            self._set('mission', f"MISSION: {b.mission_state}",
+                      'amber' if 'skipped' in b.mission_state else 'green')
             self.buttons['RESYNC TWIN'].setEnabled(b.mode == 'both')
             resync_age = time.monotonic() - b.last_resync_t
             resync_note = ''

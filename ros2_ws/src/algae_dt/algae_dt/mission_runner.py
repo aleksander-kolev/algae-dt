@@ -98,6 +98,11 @@ class MissionRunner(Node):
         self.pub_cmd = self.create_publisher(TwistStamped, '/dt/cmd_vel_raw', 10)
         self.pub_markers = self.create_publisher(MarkerArray, '/dt/markers', _latched())
         self.pub_state = self.create_publisher(String, '/dt/mission_state', _latched())
+        # Skips must be OPERATOR-VISIBLE the moment they happen (shared alerts channel, like
+        # sync_supervisor/twin_resync): a mission that quietly greys a bloom and then reports a
+        # bare 'complete' reads as success — an operator watched exactly that and concluded the
+        # twin "completed a mission that never ran". Honest accounting must also be loud.
+        self.pub_alerts = self.create_publisher(String, '/dt/alerts', 10)
 
         self.create_subscription(MarkerArray, '/dt/blooms', self._on_blooms, _latched())
         self.create_subscription(String, '/dt/mission_cmd', self._on_cmd, 10)
@@ -117,6 +122,20 @@ class MissionRunner(Node):
     def _set_state(self, s: str) -> None:
         with self._pub_lock:
             self.pub_state.publish(String(data=s))
+
+    def _alert_skip(self, bloom_id: int, why: str) -> None:
+        with self._pub_lock:
+            self.pub_alerts.publish(String(data=f"BLOOM {bloom_id} SKIPPED ({why})"))
+
+    def _completion_state(self) -> str:
+        """'complete' only when nothing was skipped; otherwise the summary spells the outcome out
+        ('complete (1 treated, 2 skipped)') so a partial mission can never read as a clean one."""
+        with self._lock:
+            states = [b.state for b in self._field.blooms]
+        skipped = states.count(B.SKIPPED)
+        if skipped == 0:
+            return 'complete'
+        return f"complete ({states.count(B.TREATED)} treated, {skipped} skipped)"
 
     def _load_grid(self):
         """Load the static map (maps/map.pgm) into an occupancy grid for goal projection, classified
@@ -251,7 +270,7 @@ class MissionRunner(Node):
                     field, (rx, ry) = self._field, self._robot_xy
                 target = B.nearest_untreated(field, rx, ry)
                 if target is None:
-                    self._set_state('complete')
+                    self._set_state(self._completion_state())
                     break
                 with self._lock:
                     if B.by_id(self._field, target.id) is None:
@@ -276,8 +295,10 @@ class MissionRunner(Node):
                         self._apply_outcome(target.id, B.set_pending)   # operator Stop/E-STOP -> resumable
                     else:
                         self._apply_outcome(target.id, B.mark_skipped)  # spray stalled (watchdog) -> skip
+                        self._alert_skip(target.id, 'spray stalled before the full spin count')
                 else:  # 'failed'
                     self._apply_outcome(target.id, B.mark_skipped)
+                    self._alert_skip(target.id, 'navigation failed — robot never reached it')
                 active_id = None
                 self._publish_markers()
         except Exception as exc:                           # never let the worker die silently (F1)

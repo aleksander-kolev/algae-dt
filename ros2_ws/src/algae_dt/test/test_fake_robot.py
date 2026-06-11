@@ -105,9 +105,9 @@ def test_fake_robot_scan_is_raycast_from_the_course_map():
     try:
         assert _spin_until(ex, lambda: 's' in got), "fake robot publishes /scan"
         rr = list(got['s'].ranges)
-        assert len(rr) == 360
+        assert len(rr) == bot.scan_n
         finite = [r for r in rr if r != float('inf') and r > 0.0]
-        assert len(finite) > 90, "from the arena origin most beams should return wall hits"
+        assert len(finite) > bot.scan_n // 4, "from the arena origin most beams should return wall hits"
         assert all(0.12 <= r <= 3.5 + 1e-6 for r in finite), "honest [range_min, range_max] returns"
         assert len(set(round(r, 2) for r in finite)) > 5, \
             "a real arena is not a uniform ring (the old flat-3.0 scan must be gone)"
@@ -115,6 +115,47 @@ def test_fake_robot_scan_is_raycast_from_the_course_map():
         ex.shutdown()
         bot.destroy_node()
         watcher.destroy_node()
+        rclpy.shutdown()
+
+
+def test_fake_robot_scan_caches_while_stationary(monkeypatch):
+    """The raycast is the node's only expensive work; an IDLE robot must republish the cached
+    ranges (zero march cost — at 360 beams the recompute-every-tick version starved the executor
+    on a loaded host, scans gapped, AMCL's map->odom went stale and Nav2 aborted every goal with
+    'Transform data too old'). The cache must invalidate the moment the robot moves."""
+    from algae_dt.lib import occupancy as occ_lib
+
+    calls = {'n': 0}
+    real_raycast = occ_lib.raycast_scan
+
+    def counting_raycast(*a, **kw):
+        calls['n'] += 1
+        return real_raycast(*a, **kw)
+
+    monkeypatch.setattr(occ_lib, 'raycast_scan', counting_raycast)
+    rclpy.init()
+    bot = FakeRobot()
+    if bot._grid is None:
+        bot.destroy_node()
+        rclpy.shutdown()
+        pytest.skip("installed course map not available")
+    har = CmdVelHarness()
+    ex = SingleThreadedExecutor()
+    ex.add_node(bot)
+    ex.add_node(har)
+    try:
+        _spin_until(ex, lambda: har.got_scan, secs=6.0)
+        _spin_until(ex, lambda: False, secs=1.0)            # ~5 more scan ticks, robot stationary
+        stationary_calls = calls['n']
+        assert stationary_calls <= 2, \
+            f"a stationary robot must reuse the cached raycast, got {stationary_calls} recomputes"
+        har.vx = 0.2                                        # the robot moves -> cache must miss
+        _spin_until(ex, lambda: calls['n'] > stationary_calls, secs=6.0)
+        assert calls['n'] > stationary_calls, "motion must invalidate the scan cache"
+    finally:
+        ex.shutdown()
+        bot.destroy_node()
+        har.destroy_node()
         rclpy.shutdown()
 
 

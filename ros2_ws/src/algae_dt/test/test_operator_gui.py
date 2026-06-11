@@ -194,6 +194,29 @@ def test_resync_button_enabled_only_in_both_mode():
         rclpy.shutdown()
 
 
+def test_mission_banner_goes_amber_on_a_partial_completion():
+    """'complete (1 treated, 2 skipped)' must not paint success-green: an operator watched a
+    nav-failed mission report green-complete and concluded the twin faked a mission."""
+    from PyQt5 import QtWidgets
+    rclpy.init()
+    bridge = GuiBridge()
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    win = operator_gui._make_window(bridge)
+    try:
+        win._spin.stop()
+        win._repaint.stop()
+        bridge.mission_state = 'complete'
+        win._refresh()
+        assert '#1f9d3a' in win.banners['mission'].styleSheet(), "clean complete stays green"
+        bridge.mission_state = 'complete (1 treated, 2 skipped)'
+        win._refresh()
+        assert '#d98b00' in win.banners['mission'].styleSheet(), "partial completion paints amber"
+        assert 'skipped' in win.banners['mission'].text()
+    finally:
+        bridge.destroy_node()
+        rclpy.shutdown()
+
+
 def test_window_builds_and_paints_offscreen():
     from PyQt5 import QtWidgets
     rclpy.init()

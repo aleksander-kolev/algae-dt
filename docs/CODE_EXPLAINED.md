@@ -282,8 +282,12 @@ The interesting mechanisms:
   if the heading **stops changing** for 3 s (odometry frozen), abort; and an absolute time cap as
   a belt-and-braces backstop. Both watchdogs use wall-clock, not sim time, on purpose.
 
-- **Honest accounting.** A bloom is marked *treated* (green) only after a confirmed arrival
-  **and** a completed full spray. Failed navigation → *skipped* (grey). Operator Stop / E-STOP →
+- **Honest accounting — and LOUD.** A bloom is marked *treated* (green) only after a confirmed
+  arrival **and** a completed full spray. Failed navigation → *skipped* (grey) **plus an
+  operator-visible `BLOOM n SKIPPED (…)` line on `/dt/alerts`**, and the final state spells the
+  outcome out: plain `complete` only when everything was treated, otherwise
+  `complete (N treated, M skipped)` with an AMBER mission banner — a partial mission must never
+  read as a clean success. Operator Stop / E-STOP →
   back to *pending* (yellow, resumable). Even if the worker thread crashes, the in-flight bloom
   is put back to pending — never left looking "in progress" and never falsely marked done. The
   rubric (and basic honesty) demand the display never claims work that didn't happen.
@@ -326,7 +330,9 @@ ahead — set it under 0.25 m to test the safety stop), `/battery_state`, and th
 laser. Like the real robot, it **stops when commands stop arriving** (0.5 s timeout) instead of
 coasting forever.
 
-Its LiDAR is a real synthetic LDS-02: each beam is **raycast through the course map**
+Its LiDAR is a real synthetic LDS-02 (180 beams, cached while stationary so an idle robot costs
+nothing — a 360-beam recompute-every-tick version starved the executor on a loaded host and
+stalled AMCL's TF): each beam is **raycast through the course map**
 (`lib/occupancy.raycast_scan`) from the robot's pose, so the fake robot *sees the actual arena* —
 AMCL can genuinely localize on its scan, the real-vs-sim sensor delta is meaningful, and driving
 at a wall trips the 25 cm gate for real. (The original flat 3.0 m ring made the hardware-free

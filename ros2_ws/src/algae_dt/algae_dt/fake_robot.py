@@ -51,7 +51,12 @@ class FakeRobot(Node):
     def __init__(self, **kwargs) -> None:
         super().__init__('fake_robot', **kwargs)
         gp = functools.partial(declare_get, self)
-        self.scan_n = int(gp('fake_scan_beams', 360))
+        # 180 beams (2 deg), not the LDS-02's 360: AMCL/safety/costmaps are insensitive to the
+        # halving, but the pure-python raycast is not — at 360 beams on a loaded home rig one scan
+        # could overrun the 0.2 s period, AMCL's map->odom went ~0.5 s stale, and Nav2's controller
+        # aborted every goal with "Transform data too old" (missions looked like instant fake
+        # completions). Wind it back up on a fast machine if 1-deg fidelity ever matters.
+        self.scan_n = int(gp('fake_scan_beams', 180))
         self.scan_far = gp('fake_scan_far_m', 3.0)         # no-map FALLBACK background range only
         self.front_m = gp('fake_front_m', 0.0)             # >0: scripted obstacle dead-ahead at this
                                                            # range (min with the map return; set <0.25
@@ -82,6 +87,8 @@ class FakeRobot(Node):
         self.map_info = geometry.map_info_from_params(gp)
         self._grid = None
         self._trig = None
+        self._scan_cache = None        # (x, y, yaw, ranges) of the last raycast — an idle robot
+                                       # republishes it for free instead of re-marching 180 beams
         try:
             meta = load_map_yaml()
             self._grid = occupancy.from_pgm(load_package_map(),
@@ -176,10 +183,19 @@ class FakeRobot(Node):
         s.range_max = self.range_max
         if self._grid is not None:
             # odom == map by construction (starts at the origin; both+fake auto-seeds AMCL there),
-            # so the integrated pose IS the map pose the beams march from.
-            ranges = occupancy.raycast_scan(self._grid, self.map_info, *self._pose,
-                                            trig=self._trig, range_min=self.range_min,
-                                            range_max=self.range_max)
+            # so the integrated pose IS the map pose the beams march from. A stationary robot
+            # (sub-mm / sub-0.1deg since the last raycast — the common case between missions)
+            # reuses the cached ranges: zero march cost at idle, full recompute the moment it moves.
+            x, y, yaw = self._pose
+            c = self._scan_cache
+            if (c is not None and abs(x - c[0]) < 1e-3 and abs(y - c[1]) < 1e-3
+                    and abs(geometry.angle_diff(yaw, c[2])) < 2e-3):
+                ranges = list(c[3])
+            else:
+                ranges = occupancy.raycast_scan(self._grid, self.map_info, x, y, yaw,
+                                                trig=self._trig, range_min=self.range_min,
+                                                range_max=self.range_max)
+                self._scan_cache = (x, y, yaw, tuple(ranges))
         else:
             ranges = [self.scan_far] * self.scan_n          # no-map fallback (warned at startup)
         if self.front_m > 0.0:
