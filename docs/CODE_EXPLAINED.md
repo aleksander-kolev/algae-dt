@@ -529,6 +529,7 @@ fabricated message timestamps in a way no real system ever would, hiding the clo
 | situation | behaviour | why |
 |---|---|---|
 | obstacle < 25 cm ahead, either world | forward zeroed on BOTH robots; turn/reverse still allowed | either world is evidence; escape must stay possible |
+| the mirror sim is OUT OF SYNC (`both`) | the mirror's scan stops gating the real robot until it re-syncs | a diverged mirror measures the wrong place — its veto phantom-braked real navigation (the real robot's own LiDAR always gates) |
 | a laser stream goes stale | treated as blocked | a dead sensor must stop the robot, not blind it |
 | a world never had data (absent) | ignored by the gate | an absent world isn't a hazard; it must not freeze the present one |
 | command bus goes silent > 0.5 s | output zeroed (watchdog) | a crashed commander must not leave the last command running |

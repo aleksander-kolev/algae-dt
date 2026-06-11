@@ -64,6 +64,12 @@ Concise run scenarios. Setup commands → `docs/SETUP.md`. Each scenario: **step
   `resync_sustain_s` → expect at most one auto-resync per spray (cooldown-spaced). Harmless — the
   spin count is real-odom-based — and it lands honestly in the CSV `resync` column. Set
   `resync_auto_enable:=false` for a fully operator-controlled take.
+- **S-EDGE-I real nav stutters / weaves / ignores its own RViz path:** check the console SAFETY
+  banner — if it flashes BLOCKED while the real path is clear, that *was* the diverged mirror
+  grazing gz geometry and phantom-braking the real robot through the dual gate. Fixed: the
+  mirror's scan now vetoes only while `/dt/sync_ok` holds (the real robot's own LiDAR always
+  gates). If nav still misbehaves with SAFETY green, it's localization — see the triage section
+  in RUN_ON_LAB_PC.md.
 - **S-EDGE-H real robot won't spray-spin (sim does):** the sim-tuned 2.8 rad/s needs ~0.224 m/s
   wheel speed = the Burger's motor ceiling; under battery sag the real robot can't reach it, the
   spray stall-aborts (alert + bloom skipped) while the ideal-motor sim spins. Real modes now spray

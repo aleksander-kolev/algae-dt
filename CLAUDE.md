@@ -67,7 +67,9 @@ Authoritative docs: design + rubric `docs/RUBRIC_MAP.md`; plan `docs/PLAN.md`; e
 Nodes:
 - **`twin_mediator`** — the course's **DT Integration Node (fan-in / fan-out)**. Subscribes the
   pre-safety command bus `/dt/cmd_vel_raw` (**`TwistStamped`** — Jazzy norm; see the type contract
-  below) + both scans; applies the **25 cm dual-LiDAR safety gate**; fans the safe command out to
+  below) + both scans; applies the **25 cm dual-LiDAR safety gate** (the mirror's scan vetoes the
+  real robot ONLY while `/dt/sync_ok` holds — a diverged mirror measures the wrong place and used
+  to phantom-brake real nav); fans the safe command out to
   **`/cmd_vel` (TwistStamped, real)** AND **`/sim/cmd_vel` (sim, type verified at runtime)**.
   Mirrors `/odom`→`/dt/real_pose` (AMCL map←odom lift), the sim pose→`/dt/sim_pose` (bare `/odom`
   in `sim_only`; **`/sim/ground_truth`** in `both`),

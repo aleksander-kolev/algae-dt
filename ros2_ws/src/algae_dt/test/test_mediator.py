@@ -391,6 +391,59 @@ def test_real_mode_starts_estop_held_until_first_healthy_battery():
         rclpy.shutdown()
 
 
+def test_both_mode_mirror_scan_gates_only_while_in_sync():
+    """REGRESSION (lab 2026-06): a DIVERGED mirror grazing gz geometry the real robot had cleared
+    PHANTOM-BRAKED the real robot in bursts — DWB replanned around stops that didn't exist and nav
+    looked 'messed up, not following its own path'. The mirror's scan may veto forward motion only
+    while /dt/sync_ok holds: in-sync -> the virtual obstacle blocks BOTH (pillar ③ preserved,
+    including by default before any sync verdict); out-of-sync -> the mirror is excluded exactly
+    like the no-mirror modes; re-sync -> the veto returns. The REAL scan always gates."""
+    from geometry_msgs.msg import TwistStamped as _TS
+
+    rclpy.init()
+    med = TwinMediator(parameter_overrides=[Parameter('mode', Parameter.Type.STRING, 'both')])
+    har = rclpy.create_node('both_gate_harness')
+    state = {'cmd': None, 'safety': None}
+    p_cmd = har.create_publisher(TwistStamped, '/dt/cmd_vel_raw', 10)
+    p_scan = har.create_publisher(LaserScan, '/scan', qos_profile_sensor_data)
+    p_sim = har.create_publisher(LaserScan, '/sim/scan', qos_profile_sensor_data)
+    p_batt = har.create_publisher(BatteryState, '/battery_state', 10)
+    p_sync = har.create_publisher(Bool, '/dt/sync_ok', _latched())
+    har.create_subscription(_TS, '/cmd_vel', lambda m: state.update(cmd=m.twist.linear.x), 10)
+    har.create_subscription(Bool, '/dt/safety', lambda m: state.update(safety=m.data), _latched())
+
+    def _tick():
+        p_cmd.publish(TwistStamped(twist=_twist(0.2)))   # forward commanded on the bus
+        p_scan.publish(_make_scan(3.0))                  # the REAL robot's path is clear
+        p_sim.publish(_make_scan(0.2))                   # the MIRROR sees a wall 20 cm ahead
+        b = BatteryState()
+        b.voltage = 12.0                                 # release the real-mode startup E-STOP hold
+        p_batt.publish(b)
+    har.create_timer(1.0 / 30.0, _tick)
+
+    ex = SingleThreadedExecutor()
+    ex.add_node(med)
+    ex.add_node(har)
+    try:
+        assert _spin_until(ex, lambda: state['safety'] is True
+                           and state['cmd'] == 0.0, secs=8.0), \
+            "default trust: the in-sync mirror's virtual obstacle must block the real robot"
+        p_sync.publish(Bool(data=False))                 # the twin diverges
+        assert _spin_until(ex, lambda: state['safety'] is False
+                           and state['cmd'] is not None and abs(state['cmd'] - 0.2) < 1e-6,
+                           secs=8.0), \
+            "a diverged mirror's scan must NOT brake the real robot (phantom-brake regression)"
+        p_sync.publish(Bool(data=True))                  # resynced
+        assert _spin_until(ex, lambda: state['safety'] is True and state['cmd'] == 0.0,
+                           secs=8.0), \
+            "re-sync must restore the mirror's veto"
+    finally:
+        ex.shutdown()
+        med.destroy_node()
+        har.destroy_node()
+        rclpy.shutdown()
+
+
 def test_both_mode_sim_pose_is_gz_ground_truth_filtered_by_entity():
     """In `both`, /dt/sim_pose is the gz GROUND-TRUTH pose of the mirror entity (bridged Pose_V ->
     TFMessage on /sim/ground_truth), published verbatim (world frame == map frame by construction)
