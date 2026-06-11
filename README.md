@@ -383,6 +383,19 @@ matches `maps/map.yaml`/`maps/map.pgm`.
 - **Robot starts then does nothing near a wall:** that bloom sits inside Nav2's costmap inflation;
   `mission_runner` projects goals `goal_clearance_m` off walls and skips ones that are truly boxed
   in. Place blooms a little away from walls.
+- **Real robot navigates but won't spray-spin (the sim spins):** the spin command reached both
+  (the sim proves it) — the real side is actuation. Real modes spray at the derated
+  `spray_omega_real_radps` (1.5 rad/s; a 2.8 rad/s spin needs ~0.224 m/s wheel speed = the
+  Burger's motor ceiling, unreachable under battery sag). Isolate with
+  `ros2 topic pub -r 10 /dt/cmd_vel_raw geometry_msgs/msg/TwistStamped "{twist: {angular: {z: 1.0}}}"`,
+  stepping `z` up; check `/battery_state` voltage under load (want ≥ ~11.5 V).
+- **Real robot doesn't follow the RViz path / weaves toward walls:** almost always
+  mislocalization — mid-drive, the red scan points must sit ON the map walls; if they detach,
+  stop and re-do the 2D Pose Estimate. Remember the arena is shared: other robots/people are
+  real obstacles that are NOT on the map, so Nav2 legitimately detours around them. Inflation can
+  be tuned at runtime without a rebuild:
+  `ros2 param set /global_costmap/global_costmap inflation_layer.inflation_radius 0.25` (and the
+  same on `/local_costmap/local_costmap`), then clear both costmaps.
 - **Workspace build complains about symlinks / a stale tree:**
   `rm -rf build/ install/ log/ && colcon build --packages-select algae_dt`.
 - **Workspace was copied from another machine** (CMake errors naming a foreign path,

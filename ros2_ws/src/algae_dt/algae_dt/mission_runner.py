@@ -60,7 +60,14 @@ class MissionRunner(Node):
         gp = functools.partial(declare_get, self)
         self.mode = gp('mode', 'sim_only')
         self.spray_revolutions = gp('spray_revolutions', 3.0)   # FULL in-place spins per bloom
+        # Mode-aware spray rate. 2.8 rad/s exists for the THROTTLED sim (wall-clock spin = omega *
+        # real-time-factor); on the REAL Burger it demands ~0.224 m/s wheel speed — at/above the
+        # XL430 ceiling, worse under battery sag — and the robot simply didn't spin (lab, 2026-06)
+        # while the ideal-motor sim did. Real modes use the derated spray_omega_real_radps.
         self.spray_omega = gp('spray_omega_radps', 2.8)
+        self.spray_omega_real = gp('spray_omega_real_radps', 1.5)
+        if self.mode != 'sim_only':
+            self.spray_omega = self.spray_omega_real
         self.spray_time_margin = gp('spray_time_margin', 6.0)   # absolute cap = margin x nominal spin time
         self.spray_stall_timeout_s = gp('spray_stall_timeout_s', 3.0)  # abort when odom yaw freezes this long
         self.center_tol_m = gp('center_tol_m', 0.50)
@@ -116,7 +123,7 @@ class MissionRunner(Node):
         self._set_state('idle')
         self.get_logger().info(
             f"mission_runner up: mode={self.mode} spray={self.spray_revolutions} spins "
-            f"(map pose from {active_pose_topic})")
+            f"at {self.spray_omega} rad/s (map pose from {active_pose_topic})")
 
     # ------------------------------------------------------------------ utils
     def _set_state(self, s: str) -> None:
