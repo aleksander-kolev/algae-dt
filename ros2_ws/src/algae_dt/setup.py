@@ -34,6 +34,7 @@ setup(
         'console_scripts': [
             'twin_mediator = algae_dt.twin_mediator:main',
             'sync_supervisor = algae_dt.sync_supervisor:main',
+            'twin_resync = algae_dt.twin_resync:main',
             'mission_runner = algae_dt.mission_runner:main',
             'operator_gui = algae_dt.operator_gui:main',
             'fake_robot = algae_dt.fake_robot:main',

@@ -116,6 +116,9 @@ class SyncSupervisor(Node):
         self._csv_rows = 0
         self._alert_last: dict[str, float] = {}   # alert key -> last publish time (edge+repeat gating)
         self._alert_active: dict[str, bool] = {}  # alert key -> condition was true last tick
+        # twin_resync executed a correction: held until stamped into a CSV row (the evidence that
+        # drift was CORRECTED, not just measured), so a stream-gap tick can never drop it.
+        self._pending_resync: str | None = None
 
         # publishers
         self.pub_err = self.create_publisher(Vector3, '/dt/sync_error', 10)
@@ -130,6 +133,7 @@ class SyncSupervisor(Node):
         self.create_subscription(TwistStamped, '/cmd_vel', self._on_cmd, 10)
         self.create_subscription(Odometry, '/dt/odom_active', self._on_active_odom, 10)
         self.create_subscription(Bool, '/dt/safety', self._on_safety, _latched())
+        self.create_subscription(String, '/dt/resync_event', self._on_resync_event, 10)
         if self._both:
             self.create_subscription(LaserScan, '/sim/scan', self._on_sim_scan, qos_profile_sensor_data)
             self.create_subscription(Odometry, '/sim/odom', self._on_sim_odom, 10)
@@ -232,6 +236,11 @@ class SyncSupervisor(Node):
         v = math.hypot(msg.twist.twist.linear.x, msg.twist.twist.linear.y)
         return v > self.motion_eps_mps or abs(msg.twist.twist.angular.z) > self.motion_eps_radps
 
+    def _on_resync_event(self, msg: String) -> None:
+        # "<trigger> dxy=… -> sim snapped to (…)" — the CSV cell carries the trigger word
+        self._pending_resync = (msg.data.split() or ['resync'])[0]
+        self.get_logger().info(f"twin resync executed: {msg.data}")
+
     def _on_safety(self, msg: Bool) -> None:
         blocked = bool(msg.data)
         if self._both and blocked and not self._safety_blocked:
@@ -329,8 +338,9 @@ class SyncSupervisor(Node):
 
         if self._csv:
             if self._csv_rows < self.csv_max_rows:
+                resync_tag, self._pending_resync = self._pending_resync, None   # consumed on write
                 self._csv.write(metrics.csv_row(self._now(), err.dxy, err.dyaw, err.sensor,
-                                                fresh_latency, ok, skew) + '\n')
+                                                fresh_latency, ok, skew, resync_tag) + '\n')
                 self._csv.flush()
                 self._csv_rows += 1
                 if self._csv_rows == self.csv_max_rows:

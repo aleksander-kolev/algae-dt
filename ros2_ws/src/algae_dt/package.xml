@@ -5,7 +5,7 @@
   <version>0.1.0</version>
   <description>
     Custom digital-twin package for a TurtleBot3 Burger algae-bloom cleaner (TU/e 2IRR10).
-    Thin DT layer (mediator / sync supervisor / mission / operator GUI) on top of the DEFAULT
+    Thin DT layer (mediator / sync supervisor / twin resync / mission / operator GUI) on top of the DEFAULT
     turtlebot3 packages (turtlebot3_gazebo, turtlebot3_navigation2, turtlebot3_bringup,
     turtlebot3_teleop). Those default packages are provided by the environment and launched at
     runtime; they are intentionally NOT declared as build/exec deps here (course "custom package on
@@ -31,6 +31,7 @@
   <exec_depend>nav2_common</exec_depend>      <!-- launch/bringup.launch.py: RewrittenYaml -->
   <exec_depend>nav2_simple_commander</exec_depend>
   <exec_depend>visualization_msgs</exec_depend>
+  <exec_depend>tf2_msgs</exec_depend>       <!-- twin_mediator: TFMessage on /sim/ground_truth -->
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>python3-pyqt5</exec_depend>
   <exec_depend>python3-yaml</exec_depend>

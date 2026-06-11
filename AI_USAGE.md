@@ -1,4 +1,4 @@
-# AI usage and authorship declaration
+﻿# AI usage and authorship declaration
 
 This document declares the use of generative-AI assistance in the **algae-dt** project, for
 transparency in line with the TU/e 2IRR10 guidelines on the use of generative AI and LLMs.
@@ -26,7 +26,7 @@ transparency in line with the TU/e 2IRR10 guidelines on the use of generative AI
   defining each component's behaviour and reviewing and correcting the output: the pure helper
   modules (the world/map-pixel transforms, the LiDAR front-sector safety gate, bloom bookkeeping,
   the sync maths and unicycle integrator, the PGM parser, occupancy and goal projection), the node
-  logic (mediator, sync supervisor, mission runner, operator GUI, fake robot, dynamic obstacle), and
+  logic (mediator, sync supervisor, twin resync, mission runner, operator GUI, fake robot, dynamic obstacle), and
   the launch wiring.
 - **Domain understanding** — explaining terminology and concepts (digital twinning, ROS 2
   topics/TF/frames, Nav2 and AMCL, occupancy/SLAM maps, the LDS-02 LiDAR) so the team could specify

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Open the sim_only stack with GUI windows (operator console + RViz) for hands-on use. Run inside
-# the algae-dt:dev container with a WSLg/X display mounted, e.g. from WSL:
+# Open the sim_only digital-twin stack with GUI windows (operator console + RViz) for hands-on
+# testing. Run inside the algae-dt:dev container with a WSLg/X display mounted, e.g. from WSL:
 #   docker run -d --name algae_dt_sim --net=host -e DISPLAY=:0 -e QT_X11_NO_MITSHM=1 \
 #     -v /tmp/.X11-unix:/tmp/.X11-unix \
 #     -v "$PWD/ros2_ws:/ws" -v "$PWD/docker:/ci" algae-dt:dev bash /ci/open_sim.sh
@@ -9,7 +9,7 @@
 # on_exit_shutdown, would tear the whole launch down). The Gazebo SERVER still renders the LiDAR; you
 # drive + visualise via the operator console and RViz. Pass extra launch args through, e.g.
 #   bash /ci/open_sim.sh use_rviz:=false        # operator console only
-# NOTE: no `set -u` — sourcing ROS/colcon setup references unbound vars.
+# NOTE: no `set -u` — sourcing ROS/colcon setup references unbound vars (BEST_APPROACHES §Lessons).
 set -o pipefail
 source /opt/ros/jazzy/setup.bash
 cd /ws || exit 1

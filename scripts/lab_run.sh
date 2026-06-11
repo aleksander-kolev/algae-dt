@@ -195,7 +195,7 @@ PAYLOAD='
   [ -f /opt/turtlebot3_ws/install/setup.bash ] && source /opt/turtlebot3_ws/install/setup.bash || true
   [ -f "$DT_WS/install/setup.bash" ] && source "$DT_WS/install/setup.bash" || true
   missing=""
-  for p in turtlebot3_gazebo nav2_bringup nav2_common nav2_simple_commander ros_gz_sim ros_gz_bridge rviz2; do
+  for p in turtlebot3_gazebo turtlebot3_navigation2 nav2_bringup nav2_common nav2_simple_commander ros_gz_sim ros_gz_bridge rviz2; do
     ros2 pkg prefix "$p" >/dev/null 2>&1 || missing="$missing $p"
   done
   python3 -c "import PyQt5" >/dev/null 2>&1 || missing="$missing PyQt5"

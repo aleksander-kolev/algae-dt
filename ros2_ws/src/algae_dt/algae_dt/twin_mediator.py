@@ -28,6 +28,7 @@ from rclpy.qos import (DurabilityPolicy, QoSProfile, ReliabilityPolicy,
 from rclpy.time import Time as RclpyTime
 from sensor_msgs.msg import BatteryState, LaserScan
 from std_msgs.msg import Bool, Float64, String
+from tf2_msgs.msg import TFMessage
 from tf2_ros import Buffer, TransformException, TransformListener
 
 from algae_dt.lib import geometry, hud, safety, sync
@@ -68,6 +69,7 @@ class TwinMediator(Node):
         self.batt_empty_v = gp('battery_empty_v', 9.0)
         self.batt_full_v = gp('battery_full_v', 12.6)
         self.sync_source = gp('sim_only_sync_source', 'commanded')   # 'none' disables the shadow real_pose
+        self.sim_entity = gp('sim_entity_name', 'burger_sim')        # gz entity of the `both` mirror
 
         self._both = self.mode == 'both'
         self._sim_is_bare = self.mode == 'sim_only'      # the bare robot is the sim
@@ -108,6 +110,13 @@ class TwinMediator(Node):
         self.pub_safety = self.create_publisher(Bool, '/dt/safety', _latched())
         self.pub_estop = self.create_publisher(Bool, '/dt/estop', _latched())
         self.pub_mode = self.create_publisher(String, '/dt/mode', _latched())
+        # Latched localization flag: False until the map<-odom transform (AMCL) first resolves.
+        # Consumers that act on the MAP-frame /dt/real_pose (twin_resync's teleport target!) must
+        # hold off until then — pre-seed the pose is identity-lifted odom with no map meaning, and
+        # an auto-resync 5 s after launch could teleport the mirror into a wall, whose scan then
+        # BLOCKS THE REAL ROBOT through the dual-LiDAR gate. sim_only / both+fake auto-seed AMCL,
+        # so this flips True seconds after startup; real `both` flips on the 2D Pose Estimate.
+        self.pub_localized = self.create_publisher(Bool, '/dt/localized', _latched())
 
         # --- subscriptions ---
         self.create_subscription(TwistStamped, '/dt/cmd_vel_raw', self._on_cmd, 10)
@@ -122,7 +131,7 @@ class TwinMediator(Node):
         self.create_subscription(Float64, '/dt/battery_override_v', self._on_battery_override, 10)
         if self._both:
             self.create_subscription(LaserScan, '/sim/scan', self._on_sim_scan, qos_profile_sensor_data)
-            self.create_subscription(Odometry, '/sim/odom', self._on_sim_odom, 10)
+            self.create_subscription(TFMessage, '/sim/ground_truth', self._on_sim_ground_truth, 10)
 
         # --- TF: map<-odom (AMCL) so /dt/*_pose are published in the MAP frame the GUI overlays on ---
         self._tf_buffer = Buffer()
@@ -135,6 +144,8 @@ class TwinMediator(Node):
 
         # latched initial state. In real modes start E-STOP HELD (fail-safe across a mediator
         # restart, see _estop_startup_hold); sim_only starts clear exactly as before.
+        self._localized = False
+        self.pub_localized.publish(Bool(data=False))
         self.pub_mode.publish(String(data=self.mode))
         self._estop_latched = self._estop_manual or self._estop_battery or self._estop_startup_hold
         self._publish_estop()
@@ -155,6 +166,11 @@ class TwinMediator(Node):
             t = self._tf_buffer.lookup_transform('map', 'odom', RclpyTime())
             tr, rot = t.transform.translation, t.transform.rotation
             self._T_map_odom = (tr.x, tr.y, geometry.yaw_from_quaternion(rot.z, rot.w))
+            if not self._localized:                       # first successful lookup = AMCL is up
+                self._localized = True
+                self.pub_localized.publish(Bool(data=True))
+                self.get_logger().info(
+                    "map<-odom resolved: /dt/*_pose are MAP-localized (twin resync armed)")
         except TransformException:
             pass                                          # map<-odom not published yet (normal pre-AMCL)
         except Exception as exc:                          # anything else is a real fault -> surface it
@@ -201,14 +217,24 @@ class TwinMediator(Node):
             self._shadow = map_xyyaw
             self._shadow_anchored = True
 
-    def _on_sim_odom(self, msg: Odometry) -> None:
-        # In `both`, lift the sim's odom pose into the MAP frame via the SAME map<-odom as the real
-        # robot (AMCL), so /dt/sim_pose is directly comparable to /dt/real_pose (both MAP frame).
-        # Publishing it raw (odom frame, as before) made the sync discrepancy carry the full
-        # map<-odom offset instead of the true real-vs-sim divergence. The twin starts co-located and
-        # mirrors the real robot 1:1, so the real robot's map<-odom is the right lift for the sim too.
-        map_xyyaw = geometry.compose_pose_2d(self._T_map_odom, self._pose_xyyaw(msg.pose.pose))
-        self.pub_sim_pose.publish(self._map_posestamped(map_xyyaw))
+    def _on_sim_ground_truth(self, msg: TFMessage) -> None:
+        # In `both`, /dt/sim_pose is the gz GROUND-TRUTH model pose (sim_bridge.yaml bridges
+        # /world/<w>/dynamic_pose/info as Pose_V -> TFMessage so entity NAMES survive), published
+        # VERBATIM: the gz world frame == the map frame by construction (the arena world is built
+        # to the course map — the same contract sim_only AMCL auto-seeding relies on). Two reasons
+        # this replaced the old /sim/odom + map<-odom lift:
+        #   * ground truth carries no odom integration error, so /dt/sync_error measures the TRUE
+        #     real-vs-sim divergence (the old lift also borrowed the REAL robot's AMCL correction,
+        #     silently crediting the sim with it);
+        #   * it makes a twin_resync set_pose teleport REAL — pose, LiDAR viewpoint and the
+        #     measured error move together (a teleport never lands in integrated odom, so under
+        #     the old source the number could not be corrected, only restarted).
+        for t in msg.transforms:
+            if t.child_frame_id == self.sim_entity:
+                tr, rot = t.transform.translation, t.transform.rotation
+                self.pub_sim_pose.publish(self._map_posestamped(
+                    (tr.x, tr.y, geometry.yaw_from_quaternion(rot.z, rot.w))))
+                return
 
     def _on_battery(self, msg: BatteryState) -> None:
         self._battery_v = msg.voltage

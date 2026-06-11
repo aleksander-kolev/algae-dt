@@ -1,5 +1,5 @@
 <?xml version="1.0"?>
-<!-- Standalone obstacle for the "live environment change" demo. Spawn it into a running
+<!-- Standalone obstacle for the pillar-III "live environment change" demo. Spawn it into a running
      sim to make the robot's LiDAR see a NEW obstacle (dual-LiDAR stop) or force a Nav2 reroute:
        ros2 run ros_gz_sim create -world default -name algae_obstacle -x 0.6 -y 0.0 -z 0.25 \
          -file $(ros2 pkg prefix algae_dt)/share/algae_dt/worlds/obstacle_box.sdf

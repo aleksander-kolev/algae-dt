@@ -39,9 +39,13 @@ def sweep_clearance(px: float, py: float, cx: float, cy: float,
 
 def clamp_amplitude_for_keepout(px: float, py: float, cx: float, cy: float,
                                 amplitude: float, axis: str, keepout: float):
-    """Largest amplitude <= `amplitude` whose swept segment stays >= `keepout` from (px,py).
+    """Largest amplitude magnitude <= |amplitude| whose swept segment stays >= `keepout` from
+    (px,py). The sign is dropped at the boundary: a -A and +A sweep cover the identical segment,
+    and a negative input used to invert the caller's `clamped < amplitude` guard — silently
+    skipping the clamp and letting the box sweep through the keep-out (onto the robot spawn).
     Returns None when even amplitude 0 (the centre itself) violates the keep-out — the caller must
     refuse to run rather than teleport a box onto the protected point."""
+    amplitude = abs(amplitude)
     if sweep_clearance(px, py, cx, cy, 0.0, axis) < keepout:
         return None
     if sweep_clearance(px, py, cx, cy, amplitude, axis) >= keepout:

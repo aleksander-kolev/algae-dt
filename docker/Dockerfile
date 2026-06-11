@@ -1,13 +1,16 @@
-# Development image for algae-dt: ROS 2 Jazzy + the full turtlebot3 stack + Nav2 +
-# Gazebo Harmonic (via ros_gz) + PyQt5 + colcon. We build on top of the stock packages and
-# don't re-implement any of them.
+# Course-faithful development image for algae-dt (TU/e 2IRR10).
 #
-# The workspace isn't copied in; it's bind-mounted at /ws at run time (-v ros2_ws:/ws), so edits
-# on the host are live in the container. The build context is just this docker/ dir (no COPY),
-# which keeps the build fast and independent of the source tree.
+# This is our reproducible equivalent of the course's provided `turtlebot3_ws` Docker image
+# (docs/SETUP.md §0/§1): ROS 2 Jazzy + the FULL stock turtlebot3 stack + Nav2 +
+# Gazebo Harmonic (via ros_gz) + PyQt5 + pytest/colcon. We build ON TOP of the stock packages
+# exactly as the course mandates (DECISIONS.md D2) — nothing here re-implements them.
+#
+# The workspace is NOT copied in; it is bind-mounted at /ws at run time (matches the course
+# `-v ~/turtlebot3_ws:/ws`), so edits on the host are live in the container. Build context is
+# this `docker/` dir only (no COPY) — the build stays fast and independent of the source tree.
 #
 #   Build:  docker build -t algae-dt:dev docker          (or docker/build.ps1)
-#   Run:    docker/run.sh  /  docker/run.ps1
+#   Run:    see docker/run.ps1 / docs/DOCKER.md
 FROM ros:jazzy
 
 LABEL org.opencontainers.image.title="algae-dt-dev"
@@ -20,8 +23,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 SHELL ["/bin/bash", "-lc"]
 
-# The turtlebot3 stack (model/spawn/RSP/Nav2/teleop/SLAM) + Nav2 + Gazebo Harmonic bridge + the
-# GUI + Python tooling. Recommends stay ON so rviz2 / gz-sim GUI / PyQt5 actually render (WSLg).
+# The stock turtlebot3 stack (model/spawn/RSP/Nav2/teleop/SLAM) + Nav2 + Gazebo Harmonic bridge +
+# the GUI + Python test tooling. Recommends are kept ON so rviz2 / gz-sim GUI / PyQt5 are fully
+# functional for an actual rendered demo (WSLg), not just headless verification.
 RUN apt-get update && apt-get install -y \
       ros-jazzy-turtlebot3 \
       ros-jazzy-turtlebot3-msgs \
@@ -38,9 +42,11 @@ RUN apt-get update && apt-get install -y \
       ros-jazzy-rviz2 \
       python3-colcon-common-extensions \
       python3-pyqt5 \
+      python3-pytest \
+      python3-pytest-cov \
     && rm -rf /var/lib/apt/lists/*
 
-# Workspace mount point (-v ros2_ws:/ws).
+# Workspace mount point (course convention `-v ~/turtlebot3_ws:/ws`).
 WORKDIR /ws
 
 # Every interactive shell sources ROS, the workspace overlay (once built), and the TB3 env.

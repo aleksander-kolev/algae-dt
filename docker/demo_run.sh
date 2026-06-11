@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Launch the full sim_only stack with a visible GUI (Gazebo + RViz + the operator console) for a
-# live demo, forwarded to the Windows desktop via WSLg (X11). With software GL (no GPU in the
-# container) Gazebo is slow, but the operator console + RViz stay responsive.
+# Launch the FULL sim_only stack with VISIBLE GUI (Gazebo + RViz + our operator console) for a live
+# demo. Forwarded to the Windows desktop via WSLg (X11). Run detached with the WSLg mounts — see the
+# `docker run` in the session / docs/DOCKER.md.  Software GL (no GPU in the container) -> Gazebo is
+# slow; the operator console + RViz stay responsive.
 set -o pipefail
 export XDG_RUNTIME_DIR=/tmp/xdg-runtime
 mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"

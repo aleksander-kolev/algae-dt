@@ -8,6 +8,9 @@ Burger and a Gazebo Harmonic twin run in parallel with state synchronisation bet
 operator places algae blooms on a map; the active robot navigates to each one with Nav2 (avoiding
 static and dynamic obstacles), drives to the centre and spins three full turns in place
 ("spraying"), then moves on. A 25 cm dual-LiDAR safety gate stops forward motion in either world.
+The real-vs-sim divergence is continuously measured against documented tolerances — and **bounded**:
+when the pose error stays out of tolerance, the twin snaps the mirror back onto the real robot
+(an operator **RESYNC** button, or automatically), with every correction logged as evidence.
 
 It is built the way the course recommends: ROS 2 **Jazzy** + the stock **turtlebot3** packages
 (`turtlebot3_gazebo`, `turtlebot3_navigation2`, `turtlebot3_bringup`, `turtlebot3_teleop`) with one
@@ -36,11 +39,15 @@ algae-dt/
 │  │  │                           pose/scan/battery onto /dt/*; owns /dt/estop and /dt/mode
 │  │  ├─ sync_supervisor.py       measures real-vs-sim discrepancy (pose, sensor, command->motion
 │  │  │                           latency, stop skew); publishes /dt/sync_*; logs a CSV + alerts
+│  │  ├─ twin_resync.py           bounded-drift correction (both): snaps the sim onto the real
+│  │  │                           pose via gz set_pose — RESYNC button or auto on sustained error
 │  │  ├─ mission_runner.py        Nav2 goal to each bloom (projected clear of walls), then a
 │  │  │                           closed-loop 3-revolution spin-spray; publishes markers + state
+│  │  │                           (partial completions are loud: alerts + an explicit summary)
 │  │  ├─ operator_gui.py          PyQt5 console: map canvas, real/sim pose + live scan overlay,
-│  │  │                           click-to-place blooms, Start/Stop/Clear/E-STOP, status banners
-│  │  ├─ fake_robot.py            kinematic stand-in for the real robot (run real_only/both at home)
+│  │  │                           click-to-place blooms, Start/Stop/Clear/E-STOP/RESYNC, banners
+│  │  ├─ fake_robot.py            stand-in for the real robot, with a LiDAR raycast from the
+│  │  │                           course map (AMCL can localize on it; run real_only/both at home)
 │  │  ├─ dynamic_obstacle.py      sweeps a box across the path for the "environment change" demo
 │  │  └─ lib/                     pure helpers, no ROS imports (the unit-testable building blocks)
 │  │     ├─ geometry.py           world <-> map-pixel transforms, angle math
@@ -50,21 +57,28 @@ algae-dt/
 │  │     ├─ metrics.py            latency calc + sync-CSV row formatting
 │  │     ├─ hud.py                battery/scan formatting for the console
 │  │     ├─ pgm.py                P2/P5 PGM map parser (for the GUI canvas)
-│  │     ├─ occupancy.py          static-map occupancy + goal projection off walls
-│  │     └─ trajectory.py         sinusoidal path for the moving obstacle
+│  │     ├─ occupancy.py          static-map occupancy + goal projection + the map-raycast LiDAR
+│  │     ├─ trajectory.py         sinusoidal path for the moving obstacle
+│  │     ├─ resync.py             the drift-correction policy (manual/auto, sustain, cooldown)
+│  │     └─ gzcli.py              gz service CLI helpers (set_pose/create request plumbing)
 │  ├─ launch/bringup.launch.py    orchestrates the stock stack + Nav2 + our layer for each mode
 │  ├─ config/twin.yaml            all tunables (safety, sync tolerances, spray, battery, map dims)
 │  ├─ config/sim_bridge.yaml      ros_gz bridge that puts the mirror sim on /sim/* (both mode)
 │  ├─ maps/map.pgm, map.yaml      arena occupancy map (Nav2/AMCL + the GUI canvas)
 │  ├─ worlds/algae_arena.world    Gazebo model of the lab arena
 │  ├─ worlds/obstacle_box.sdf     a spawnable box obstacle
+│  ├─ worlds/burger_sim_gt.sdf    the `both`-mode mirror robot: stock burger + a ground-truth
+│  │                              pose publisher (what makes the resync teleport genuine)
 │  └─ package.xml, setup.py, setup.cfg, resource/
 ├─ docker/                        dev image + helpers (home / WSL2)
 │  ├─ Dockerfile                  ROS 2 Jazzy + turtlebot3 stack + Nav2 + Gazebo Harmonic + PyQt5
 │  ├─ build.sh / build.ps1        build the image (tag: algae-dt:dev)
 │  ├─ run.sh / run.ps1            start the container (run.sh wires up the X11 display on WSL)
 │  ├─ demo_run.sh                 one-shot inside the container: build + launch sim_only with RViz
-│  └─ open_sim.sh                 sim_only with the Gazebo 3D window off (WSL GL workaround) + RViz
+│  ├─ open_sim.sh                 sim_only with the Gazebo 3D window off (WSL GL workaround) + RViz
+│  ├─ open_both.sh                the full hardware-free twin (`both use_fake_robot`) with GUIs
+│  ├─ verify_running.sh           one-shot liveness check to exec inside a running container
+│  └─ probe_ground_truth.sh       diagnostic: dump the bridged ground-truth frame names
 ├─ scripts/
 │  ├─ lab_run.sh                  the lab-laptop runner: full real+sim (both), or --sim fallback;
 │  │                              auto-detects Docker vs the lab PC's native (no-Docker) stack
@@ -136,6 +150,15 @@ docker run -d --name algae_dt_sim --net=host -e DISPLAY="${DISPLAY:-:0}" -e QT_X
   -v /tmp/.X11-unix:/tmp/.X11-unix \
   -v "$PWD/ros2_ws:/ws" -v "$PWD/docker:/ci" algae-dt:dev bash /ci/open_sim.sh
 docker logs -f algae_dt_sim          # watch it;  docker rm -f algae_dt_sim  to stop
+
+# the FULL hardware-free twin (`both` with the fake robot): real-side stand-in + Gazebo mirror +
+# RViz + console, AMCL auto-seeded — drive it, place blooms, try the RESYNC TWIN button:
+docker run -d --name algae_dt_both --net=host -e DISPLAY="${DISPLAY:-:0}" -e QT_X11_NO_MITSHM=1 \
+  -v /tmp/.X11-unix:/tmp/.X11-unix \
+  -v "$PWD/ros2_ws:/ws" -v "$PWD/docker:/ci" algae-dt:dev bash /ci/open_both.sh
+# (from Windows PowerShell + Docker Desktop, replace the X11 mount with
+#  -v /run/desktop/mnt/host/wslg/.X11-unix:/tmp/.X11-unix and -e DISPLAY=:0)
+docker exec algae_dt_both bash /ci/verify_running.sh   # liveness check: nodes + key topics
 ```
 
 ### Headless (no display)
@@ -169,6 +192,12 @@ Run `both` at home, no robot required:
 ```bash
 ros2 launch algae_dt bringup.launch.py mode:=both use_fake_robot:=true
 ```
+
+In this hardware-free `both`, AMCL is auto-seeded at the origin (the fake robot deterministically
+starts there, matching the sim spawn) so Nav2 activates with no RViz click, and the fake robot's
+LiDAR is raycast from the course map — AMCL genuinely localizes on it and driving at a wall trips
+the 25 cm gate for real. On the real robot, the operator's RViz **2D Pose Estimate** stays the
+localization source, exactly as the course teaches.
 
 ---
 
@@ -226,7 +255,13 @@ Nav2's AMCL starts assuming the robot is at the map origin, but the real start n
 RViz, click **2D Pose Estimate**, then click the robot's actual spot on the map and drag in the
 direction it's physically facing. The red LiDAR points should snap onto the map walls — if not,
 repeat until they do. Only then place blooms and press Start. Re-do this after any Nav2/AMCL
-restart. (`sim_only` does this automatically.)
+restart. (`sim_only` and the hardware-free `both` do this automatically.)
+
+After the estimate the twin aligns itself: the mirror spawns at the map origin, so the pose error
+exceeds tolerance and `twin_resync` auto-snaps the mirror onto the real robot within a few seconds
+(or press **RESYNC TWIN**). Wait for the SYNC banner to go green, then Start. The same correction
+fires any time drift exceeds the documented tolerance mid-session — it's logged evidence, not a
+failure.
 
 ### Shutting down
 
@@ -244,9 +279,14 @@ ssh turtlebot@192.168.8.36 'sudo shutdown now'
 - **Start** runs the mission (nearest bloom first, navigate, spin-spray, repeat). **Stop** halts it.
 - **E-STOP** latches forward motion off everywhere; **Resume** clears it. (Space starts a mission,
   Esc triggers E-STOP.)
-- Bloom colour = state: yellow pending, blue active, green treated, grey skipped.
-- Banners show mode, mission state, sync status + error, command->motion latency, battery, the
-  safety gate, and E-STOP.
+- **RESYNC TWIN** (`both` only) snaps the Gazebo mirror onto the real robot's pose; the same
+  correction fires automatically when the sync error stays out of tolerance. It waits for AMCL to
+  be localized — a click before the 2D Pose Estimate queues and executes once localization lands.
+- Bloom colour = state: yellow pending, blue active, green treated, grey skipped. A skip is loud:
+  an alert names the bloom and why, and the final mission state spells it out
+  (`complete (1 treated, 1 skipped)`, amber banner) — plain green `complete` means all treated.
+- Banners show mode, mission state, sync status + error (with a note when the twin recently
+  resynced), command->motion latency, battery, the safety gate, E-STOP, and alerts.
 
 ---
 
@@ -264,7 +304,15 @@ The active robot is always on the bare topics (`/scan`, `/odom`, `/cmd_vel`, `/b
 `both` the mirror sim lives entirely on `/sim/*` so the two never collide. Everything the GUI and the
 sync supervisor consume is published on `/dt/*` (`/dt/real_pose`, `/dt/sim_pose`, `/dt/scan_active`,
 `/dt/sync_error`, `/dt/latency_ms`, `/dt/sync_ok`, `/dt/alerts`, `/dt/safety`, `/dt/health`,
-`/dt/estop`, `/dt/mode`, `/dt/markers`, `/dt/mission_state`).
+`/dt/estop`, `/dt/mode`, `/dt/localized`, `/dt/markers`, `/dt/mission_state`).
+
+In `both`, `/dt/sim_pose` is the mirror's Gazebo **ground-truth** pose (`/sim/ground_truth`, from
+the pose publisher in `worlds/burger_sim_gt.sdf`; the world frame equals the map frame by
+construction). That is what makes the drift correction genuine: when `twin_resync` teleports the
+mirror onto the real robot's pose (`/dt/resync_cmd` from the console, or automatically after a
+sustained out-of-tolerance error), the displayed pose, the mirror's LiDAR viewpoint, and the
+measured sync error all move together, and the executed correction is published on
+`/dt/resync_event` and stamped into the sync CSV's `resync` column.
 
 Note for Jazzy: `/cmd_vel` is `geometry_msgs/TwistStamped` (both the real bringup and Gazebo expect
 it stamped), so the whole bus is `TwistStamped`. The launch sets `enable_stamped_cmd_vel:true` on
@@ -275,10 +323,11 @@ Nav2 and remaps its controller output onto `/dt/cmd_vel_raw`.
 ## Configuration
 
 Every tunable lives in `config/twin.yaml` (nodes never hard-code these) — the safety stop distance
-and front sector, the Burger speed limits, the sync tolerances and latency budget, the spray
-revolution count and spin rate, the battery thresholds, and the map dimensions. The launch binds
-the whole file to all nodes via the `/**` wildcard. Map metadata in `twin.yaml` matches
-`maps/map.yaml`/`maps/map.pgm`.
+and front sector, the Burger speed limits, the sync tolerances and latency budget, the resync
+policy (`resync_auto_enable`, sustain, cooldown), the spray revolution count and spin rate, the
+battery thresholds, the fake robot's LiDAR, the dynamic obstacle's sweep, and the map dimensions.
+The launch binds the whole file to all nodes via the `/**` wildcard. Map metadata in `twin.yaml`
+matches `maps/map.yaml`/`maps/map.pgm`.
 
 ---
 

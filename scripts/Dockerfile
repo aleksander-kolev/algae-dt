@@ -1,12 +1,13 @@
-# Self-contained fallback image for the lab laptop, built by scripts/lab_run.sh only when neither
-# a turtlebot3_ws image nor algae-dt:dev is already present.
+# Self-contained FALLBACK image for the lab laptop — used by scripts/lab_run.sh ONLY when neither the
+# course `turtlebot3_ws` image nor our `algae-dt:dev` image is present ("trust nothing on the machine").
 #
-# Same contents as docker/Dockerfile: ROS 2 Jazzy + the full turtlebot3 stack + Nav2 +
-# Gazebo Harmonic (ros_gz) + PyQt5 + colcon. No COPY — the workspace is bind-mounted at /ws at run
-# time, so the build context is irrelevant and the build stays fast.
+# It is a drop-in equivalent of the course `turtlebot3_ws` image: ROS 2 Jazzy + the FULL stock
+# turtlebot3 stack + Nav2 + Gazebo Harmonic (ros_gz) + PyQt5 + colcon/pytest. Kept in sync with
+# docker/Dockerfile (the dev image). No COPY — the workspace is bind-mounted at /ws at run time, so
+# the build context is irrelevant and the build is fast/independent of the source tree.
 #
-# Needs internet at build time (base image + apt). Built automatically by lab_run.sh as
-# algae-dt:fallback, or manually:  docker build -t algae-dt:fallback -f scripts/Dockerfile scripts
+# Requires internet at BUILD time (base image pull + apt). Built automatically by lab_run.sh as
+# `algae-dt:fallback`; or manually:  docker build -t algae-dt:fallback -f scripts/Dockerfile scripts
 FROM ros:jazzy
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -14,8 +15,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LDS_MODEL=LDS-02
 SHELL ["/bin/bash", "-lc"]
 
-# The turtlebot3 stack (model/spawn/RSP/Nav2/teleop/SLAM) + Nav2 + Gazebo Harmonic bridge + the
-# GUI + Python tooling. Recommends ON so rviz2 / gz-sim GUI / PyQt5 actually render.
+# The stock turtlebot3 stack (model/spawn/RSP/Nav2/teleop/SLAM) + Nav2 + Gazebo Harmonic bridge +
+# the GUI + Python tooling. Recommends ON so rviz2 / gz-sim GUI / PyQt5 render a real demo.
 RUN apt-get update && apt-get install -y \
       ros-jazzy-turtlebot3 \
       ros-jazzy-turtlebot3-msgs \
@@ -32,12 +33,14 @@ RUN apt-get update && apt-get install -y \
       ros-jazzy-rviz2 \
       python3-colcon-common-extensions \
       python3-pyqt5 \
+      python3-pytest \
+      python3-pytest-cov \
       iputils-ping \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /ws
-# Source ROS + the workspace overlay (once built) in every shell. (Some images also expose the
-# stack at /opt/turtlebot3_ws/install — lab_run.sh sources that too if present.)
+# Source ROS + the workspace overlay (once built) in every shell. (Matches the course image, which
+# also exposes the stack at /opt/turtlebot3_ws/install — lab_run.sh sources that too if present.)
 RUN printf '%s\n' \
       'source /opt/ros/jazzy/setup.bash' \
       '[ -f /ws/install/setup.bash ] && source /ws/install/setup.bash' \

@@ -73,8 +73,12 @@ def _sim_mirror(pkg, world, headless, gz_gui):
     """both: the Gazebo mirror pushed entirely onto /sim/* (custom bridge + namespaced RSP).
     gz_gui works exactly as in sim_only — `both` is the PRIMARY graded lab demo and needs the same
     escape from the crash-prone gz 3D client (it previously had none short of headless, which also
-    killed the operator GUI)."""
-    model_sdf = _src('turtlebot3_gazebo', 'models', 'turtlebot3_burger', 'model.sdf')
+    killed the operator GUI).
+    The spawned model is worlds/burger_sim_gt.sdf: the STOCK burger merge-included untouched +
+    the gz PosePublisher system, which feeds the NAMED ground-truth pose the mediator publishes
+    as /dt/sim_pose and twin_resync teleports (see that file's header for why the scene
+    broadcaster's dynamic_pose/info could not provide it)."""
+    model_sdf = os.path.join(pkg, 'worlds', 'burger_sim_gt.sdf')
     urdf = _src('turtlebot3_gazebo', 'urdf', 'turtlebot3_burger.urdf')
     with open(urdf, 'r') as f:
         robot_desc = f.read()
@@ -123,6 +127,14 @@ def launch_setup(context, *args, **kwargs):
     use_rviz_cfg = LaunchConfiguration('use_rviz').perform(context).lower()
     use_rviz = (use_rviz_cfg == 'true'
                 or (use_rviz_cfg == 'auto' and mode in ('real_only', 'both') and not headless))
+    if mode in ('real_only', 'both') and not use_rviz:
+        # headless:=true (or use_rviz:=false) in a REAL mode removes the stack's ONLY /initialpose
+        # source: AMCL stays seeded at the map origin and every Nav2 goal plans from a wrong pose.
+        # Allowed (an operator may publish /initialpose by hand) but it must never be silent.
+        print(f"[bringup.launch] WARNING: mode:={mode} without RViz — AMCL has NO initial-pose "
+              "source (sim_only auto-seeds; real modes are seeded by RViz '2D Pose Estimate'). "
+              "Publish /initialpose manually or relaunch with use_rviz:=true, else the robot is "
+              "PERMANENTLY MISLOCALIZED at the map origin.", flush=True)
 
     use_sim_time = (mode == 'sim_only')
     use_sim_time_str = 'true' if use_sim_time else 'false'
@@ -174,6 +186,22 @@ def launch_setup(context, *args, **kwargs):
         # nav_goal_timeout_s still bounds a truly stuck goal.
         rewrites['movement_time_allowance'] = '30.0'
         rewrites['required_movement_radius'] = '0.1'
+    elif mode == 'both' and use_fake_robot:
+        # Hardware-free `both` (the home/dev rig): the fake robot deterministically starts at the
+        # map origin == the sim spawn (the same coupling contract as sim_only's auto-seed), so
+        # seed AMCL there instead of racing the operator's RViz click against Nav2's ~60 s
+        # costmap-activation fuse. Losing that race aborted the whole Nav2 bringup ("Failed to
+        # bring up all requested nodes") -> every mission goal failed instantly while the launch
+        # looked alive. The real lab `both` (no fake robot) keeps the operator 2D-Pose-Estimate
+        # flow. source_timeout matches sim_only: the home rig is the same throttled environment.
+        rewrites['set_initial_pose'] = 'True'
+        rewrites['source_timeout'] = '2.0'
+        # TF freshness margin for the throttled home rig: AMCL re-stamps map->odom per processed
+        # scan, so any scan-delivery hiccup under load let the transform go stale past the stock
+        # 0.2-0.3 s tolerances and Nav2's controller aborted mid-goal with "Transform data too old
+        # ... odom to map" -> bloom skipped in seconds (looked like an instant fake completion).
+        # The fake robot's odom is exact (kinematic), so a longer-lived map->odom costs nothing.
+        rewrites['transform_tolerance'] = '2.0'
     nav2_params = RewrittenYaml(
         source_file=_src('turtlebot3_navigation2', 'param', 'burger.yaml'),
         param_rewrites=rewrites, convert_types=True)
@@ -190,6 +218,10 @@ def launch_setup(context, *args, **kwargs):
         # NEVER set name= on mission_runner (process-wide remap trap, BEST_APPROACHES).
         Node(package='algae_dt', executable='mission_runner', output='screen', parameters=common),
     ]
+    if mode == 'both':
+        # bounded-drift correction (Rubric ②): GUI RESYNC button + auto gz-teleport of the sim
+        # mirror onto the real robot once the pose error stays out of tolerance (twin.yaml §resync)
+        actions.append(Node(package='algae_dt', executable='twin_resync', output='screen', parameters=common))
     if not headless:
         actions.append(Node(package='algae_dt', executable='operator_gui', output='screen', parameters=common))
     if use_rviz:

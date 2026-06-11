@@ -22,7 +22,7 @@ from rclpy.node import Node
 from rclpy.qos import (DurabilityPolicy, QoSProfile, ReliabilityPolicy,
                        qos_profile_sensor_data)
 from sensor_msgs.msg import BatteryState, LaserScan
-from std_msgs.msg import Bool, Float64, String
+from std_msgs.msg import Bool, Empty, Float64, String
 from visualization_msgs.msg import Marker, MarkerArray
 
 from algae_dt.lib import geometry, hud
@@ -73,6 +73,8 @@ class GuiBridge(Node):
         self.estop = False
         self.last_alert = ''
         self.last_alert_t = float('-inf')   # time.monotonic() of the last /dt/alerts message
+        self.last_resync = ''               # last /dt/resync_event text ("manual/auto dxy=… -> …")
+        self.last_resync_t = float('-inf')  # time.monotonic() of that event
         # Arrival clock per CONTINUOUS stream (time.monotonic). /dt/safety doubles as the
         # mediator's heartbeat — it is republished every command tick — so its age is the DT-link
         # liveness. Latched change-driven topics (/dt/estop, /dt/mode, /dt/mission_state, ...) are
@@ -87,6 +89,9 @@ class GuiBridge(Node):
         self.pub_blooms = self.create_publisher(MarkerArray, '/dt/blooms', _latched(10))
         self.pub_cmd = self.create_publisher(String, '/dt/mission_cmd', 10)
         self.pub_estop = self.create_publisher(Bool, '/dt/estop_cmd', _latched())
+        # momentary, deliberately NOT latched: a queued teleport replayed at a node (re)start
+        # would be an unexpected robot move — the operator clicks again instead
+        self.pub_resync = self.create_publisher(Empty, '/dt/resync_cmd', 10)
 
         self.create_subscription(PoseStamped, '/dt/real_pose', self._on_real_pose, 10)
         self.create_subscription(PoseStamped, '/dt/sim_pose', self._on_sim_pose, 10)
@@ -101,6 +106,7 @@ class GuiBridge(Node):
         self.create_subscription(String, '/dt/mission_state', self._on_mission_state, _latched(10))
         self.create_subscription(Bool, '/dt/estop', self._on_estop, _latched())
         self.create_subscription(String, '/dt/alerts', self._on_alert, 10)
+        self.create_subscription(String, '/dt/resync_event', self._on_resync_event, 10)
 
     # ---- inbound /dt/* state (named handlers so the mapping is unit-testable, F17) ----
     def _on_real_pose(self, m): self.real_pose = _xyyaw(m); self._seen('real_pose')
@@ -142,6 +148,10 @@ class GuiBridge(Node):
         self.last_alert = m.data
         self.last_alert_t = time.monotonic()
 
+    def _on_resync_event(self, m):
+        self.last_resync = m.data
+        self.last_resync_t = time.monotonic()
+
     # ---- operator actions ----
     def place_bloom(self, x: float, y: float) -> None:
         self._blooms.append((self._next_id, float(x), float(y)))
@@ -174,6 +184,11 @@ class GuiBridge(Node):
 
     def set_estop(self, on: bool) -> None:
         self.pub_estop.publish(Bool(data=bool(on)))
+
+    def request_resync(self) -> None:
+        """Ask twin_resync to snap the sim onto the real robot's pose (both mode only — the
+        button is disabled elsewhere and the node refuses there too)."""
+        self.pub_resync.publish(Empty())
 
 
 def _xyyaw(ps: PoseStamped):
@@ -324,13 +339,22 @@ def _make_window(bridge: GuiBridge):
                 lab.setStyleSheet('color:white; background:#333; border-radius:4px;')
                 panel.addWidget(lab)
             panel.addStretch(1)
+            self.buttons = {}
             for name, slot in (('Start', bridge.start), ('Stop', bridge.stop),
                                ('Clear', bridge.clear_blooms),
                                ('E-STOP', lambda: bridge.set_estop(True)),
-                               ('Resume', lambda: bridge.set_estop(False))):
+                               ('Resume', lambda: bridge.set_estop(False)),
+                               ('RESYNC TWIN', bridge.request_resync)):
                 btn = QtWidgets.QPushButton(name)
                 btn.clicked.connect(slot)
                 panel.addWidget(btn)
+                self.buttons[name] = btn
+            # only `both` has a mirror sim to snap; _refresh keeps this in step with /dt/mode
+            self.buttons['RESYNC TWIN'].setEnabled(False)
+            self.buttons['RESYNC TWIN'].setToolTip(
+                "Snap the sim twin onto the real robot's pose (both mode; also fires "
+                "automatically when the sync error stays out of tolerance). Queues until "
+                "AMCL is localized — do the RViz 2D Pose Estimate first.")
 
             root = QtWidgets.QHBoxLayout(self)
             root.addWidget(self.canvas, 3)
@@ -361,9 +385,17 @@ def _make_window(bridge: GuiBridge):
             shadow = "  (green = commanded shadow)" if b.mode == 'sim_only' else ""
             self._set('mode', f"MODE: {b.mode}{shadow}" + ("  — DT LINK LOST" if link_lost else ""),
                       'amber' if link_lost else 'green')
-            self._set('mission', f"MISSION: {b.mission_state}", 'green')
+            # a partial completion ('complete (1 treated, 2 skipped)') must not paint success-green
+            self._set('mission', f"MISSION: {b.mission_state}",
+                      'amber' if 'skipped' in b.mission_state else 'green')
+            self.buttons['RESYNC TWIN'].setEnabled(b.mode == 'both')
+            resync_age = time.monotonic() - b.last_resync_t
+            resync_note = ''
+            if b.last_resync and resync_age < b.alert_hold_s:
+                trigger = (b.last_resync.split() or ['?'])[0]
+                resync_note = f"  | resynced ({trigger}) {resync_age:.0f}s ago"
             self._set('sync', f"SYNC: {hud.sync_text(b.sync_ok)}  "
-                      f"dxy={b.sync_err[0]:.2f} dyaw={b.sync_err[1]:.2f}",
+                      f"dxy={b.sync_err[0]:.2f} dyaw={b.sync_err[1]:.2f}{resync_note}",
                       'green' if b.sync_ok else 'red')
             lat_age = b.age_s('latency')
             if math.isnan(b.latency_ms):
