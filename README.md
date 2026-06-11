@@ -240,6 +240,46 @@ ros2 launch turtlebot3_bringup robot.launch.py        # leave this running
 Overrides if your robot differs: `ROBOT_IP=… ROS_DOMAIN_ID=… ./scripts/lab_run.sh`. Force a
 runtime with `--native` / `--docker`.
 
+### If the script doesn't work — fully manual
+
+This works no matter where the repo sits — including **the whole repo dropped inside the
+workspace** (`~/turtlebot3_ws/src/algae-dt/`): colcon discovers packages recursively, so the
+nested `ros2_ws/src/algae_dt` is found without copying anything around.
+
+```bash
+# 1) fresh terminal — source the underlays (ROS + the lab's from-source turtlebot3 stack)
+source /opt/ros/jazzy/setup.bash
+source ~/turtlebot3_ws/install/setup.bash
+
+# 2) ONE copy only: if a previous run copied the package to src/algae_dt AND the whole repo
+#    is also under src/, colcon aborts with "duplicate package algae_dt" — remove the copy:
+rm -rf ~/turtlebot3_ws/src/algae_dt        # keep the repo; skip if it doesn't exist
+
+# 3) build just our package (colcon finds it wherever it is under src/)
+cd ~/turtlebot3_ws
+colcon build --packages-select algae_dt
+source install/setup.bash
+
+# 4) environment — repeat these in EVERY terminal you open
+export TURTLEBOT3_MODEL=burger LDS_MODEL=LDS-02 ROS_DOMAIN_ID=36 ROS_LOCALHOST_ONLY=0
+
+# 5) robot link check (the Pi bringup from step 2 above must already be running)
+ros2 topic hz /scan                        # ~5 Hz on the LDS-02
+
+# 6) launch (RViz opens automatically in `both`; do the 2D Pose Estimate, wait for the
+#    SYNC banner to go green — the twin auto-aligns — then place blooms and Start)
+ros2 launch algae_dt bringup.launch.py mode:=both
+# no robot available?  mode:=sim_only  (skip step 5)
+```
+
+If something in that sequence fails: a build error naming **another machine's paths** /
+`PermissionError` on `install/**` → the workspace itself is broken, run
+`./scripts/lab_fix_workspace.sh` first; `turtlebot3_gazebo`/`turtlebot3_navigation2`/`nav2_*`/
+`rviz2` **not found** → the stack isn't in this workspace (recover it, or flag a missing system
+package to a TA — no sudo on the lab PC); `import PyQt5` fails → `pip install --user PyQt5`;
+zero topics from the robot → wrong `ROS_DOMAIN_ID`, not on `AP2IRR10`, or a leftover
+`ROS_LOCALHOST_ONLY=1` in the shell (step 4 neutralizes it).
+
 Teleop in another terminal (the script prints the exact line for the runtime it picked, remapped
 onto the safety bus — native version shown):
 
