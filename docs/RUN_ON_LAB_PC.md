@@ -104,6 +104,12 @@ the arena, so the real start never matches the origin — you must tell AMCL the
 4. **Only then** place blooms / press Start. Do this **before** any mission, and **again after any
    AMCL/Nav2 restart** (a restart re-seeds to the origin). Skipping it → Nav2 plans from a wrong pose
    → the robot drives wrong or skips goals.
+5. **The twin then aligns itself:** the sim spawns at the map origin, so right after the pose
+   estimate the sync error exceeds tolerance — within ~5 s `twin_resync` **auto-snaps the sim onto
+   the real robot** (or press **RESYNC TWIN** in the GUI). Wait for the SYNC banner to go green
+   ("resynced (auto) …"), then Start. The same correction fires any time drift exceeds the
+   documented tolerance mid-session — it's logged in the CSV `resync` column, a demo beat, not a
+   failure.
 
 ## Prerequisites (the script errors clearly if any fail)
 - **A healthy native workspace + runtime deps** — the §0 checklist: `turtlebot3_*` from

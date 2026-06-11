@@ -46,16 +46,23 @@ digital→real arrows are demonstrable at home without a robot.
 - **Documented tolerance thresholds + rationale** in `config/twin.yaml` (`tol_pose_xy_m`,
   `latency_budget_ms`, `stop_skew_ms`…).
 - **Alerts/logging when out of tolerance:** `/dt/alerts` (String) + CSV row + GUI banner amber/red.
+- **Drift is CORRECTED, not just measured (`both`):** `twin_resync` snaps the sim onto the real
+  pose (gz ground truth + set_pose) on the GUI **RESYNC TWIN** button or automatically after a
+  sustained out-of-tolerance — the mirror **stays** consistent by construction, and every
+  correction lands in the CSV `resync` column (the predict/correct loop, demonstrable on cue).
 - **Demonstrable in `sim_only` (the fallback env):** with no real robot, sync error = COMMANDED
   (integrated from `/dt/cmd_vel_raw`) vs ACHIEVED sim pose (`sim_only_sync_source: commanded`) — so
   pillar ② is shown even without hardware. Latency = mediator command stamp → sim motion onset.
 
-**Evidence:** the generated `sync_metrics_<run>.csv`; a screenshot/recording of the GUI sync banner
-going amber when you nudge the sim out of tolerance; `ros2 topic echo /dt/alerts` firing on cue.
-**Demo step:** show pose locked in tolerance, then induce a discrepancy → alert + log appear.
+**Evidence:** the generated `sync_metrics_<run>.csv` (incl. `resync` rows); a screenshot/recording
+of the GUI sync banner going amber when you nudge the sim out of tolerance and snapping back on
+resync; `ros2 topic echo /dt/alerts` firing on cue.
+**Demo step:** show pose locked in tolerance, then induce a discrepancy → alert + log appear →
+auto/RESYNC corrects it → error collapses on the live banner.
 **Redlining (4):** near-real-time mirroring of **multiple** states incl. **≥1 internal state that
 affects behavior/display** — battery≤critical → **auto-E-STOP** (behavior) + red banner, `/dt/mode`,
-plus measured error/latency + documented tolerances + alerts; mirror stays consistent throughout.
+plus measured error/latency + documented tolerances + alerts; mirror stays consistent throughout
+(enforced by the bounded-drift resync, not hoped for).
 
 ### ③ Environmental interaction — 4 pts  (course rows: "Obstacle Detection & Avoidance" + "Object Manipulation/Transport")
 **Deliverable:** three distinct interactions (bar is "pick one" — we do three):

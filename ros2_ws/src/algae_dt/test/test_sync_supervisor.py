@@ -154,6 +154,25 @@ def test_csv_evidence_written_with_columns(world):
         f"a CSV data row must carry the measured dxy ~0.03, got {dxys[:5]}"
 
 
+def test_resync_event_is_stamped_into_the_csv_exactly_once(world):
+    """A twin_resync execution (/dt/resync_event) must land in the evidence CSV's `resync` column —
+    the proof that drift was CORRECTED, not just measured — on exactly ONE row (consumed on write,
+    never re-stamped on later ticks)."""
+    har, ex, tmp_path = world
+    p_evt = har.create_publisher(String, '/dt/resync_event', 10)
+    _spin_until(ex, lambda: har.last_err is not None, secs=3.0)     # rows are being written
+    p_evt.publish(String(data='auto dxy=0.31 dyaw=0.05 -> sim snapped to (1.20 0.45 1.57)'))
+    _spin_until(ex, lambda: False, secs=0.8)                        # a few 5 Hz ticks
+    files = glob.glob(os.path.join(str(tmp_path), 'sync_metrics_*.csv'))
+    assert files
+    with open(files[0], encoding='utf-8') as f:
+        lines = f.read().strip().splitlines()
+    cols = metrics.csv_header().split(',')
+    ri = cols.index('resync')
+    tags = [r.split(',')[ri] for r in lines[1:]]
+    assert tags.count('auto') == 1, f"exactly one row must carry the resync tag, got {tags}"
+
+
 def test_missing_world_fails_loud(world):
     """In sim_only/both a missing/stale sim pose stream is itself a desync: sync_supervisor must
     flip /dt/sync_ok False and raise /dt/alerts, not silently skip the tick (F5)."""

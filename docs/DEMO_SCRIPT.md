@@ -35,6 +35,11 @@ keeps running (a 3D-client crash is non-fatal by design).
   drop the override).
 - Cut to `/dt/sync_error` + `/dt/latency_ms` numbers + the GUI **ALERT banner** / `/dt/alerts`
   when nudged out of tolerance.
+- **The resync beat (`both`):** let the drift exceed tolerance (carry the robot half a metre, or
+  just keep driving) → alert fires → say *"drift exceeded our documented 15 cm tolerance — the
+  twin now corrects it"* → it **auto-resyncs** (or press **RESYNC TWIN**): the sim snaps onto the
+  real pose, `dxy` collapses to ~0 live on the SYNC banner ("resynced (auto) 2s ago"), and the
+  CSV row carries `auto`. Measured → alerted → **corrected**, in one shot.
 
 ## 1:45–2:30 · Environmental & object interaction (→ Redlining 4)
 - **Introduce an environment change LIVE:**

@@ -174,7 +174,7 @@ Two mode-dependent rules to remember:
 
 ---
 
-## 4. The six nodes, one by one
+## 4. The seven nodes, one by one
 
 ### 4.1 `twin_mediator.py` — the heart (the fan-in / fan-out chokepoint)
 
@@ -339,6 +339,32 @@ doesn't exist), re-spawns if the box vanishes (e.g. a world reset), and — beca
 teleported with **no physics** — it clamps its sweep so it can never pass through the robot's
 spawn point.
 
+### 4.7 `twin_resync.py` — the drift corrector (pillar ②, `both` only)
+
+**What it does, simply:** the mirror sim follows the *same commands* as the real robot, not the
+real robot itself — so over time wheel slip, motor lag and physics differences make the two poses
+drift apart. The supervisor *measures* that drift; this node *fixes* it: it teleports the sim
+robot onto the real robot's pose (Gazebo `set_pose`, same mechanism as the obstacle box) either
+when the operator presses **RESYNC TWIN** in the GUI, or automatically once the error has stayed
+beyond the documented tolerance for a few seconds. Think "predict with the model, correct with
+the data" — the standard state-estimation loop, applied to the whole twin.
+
+The rules that keep it safe (all in pure, unit-tested `lib/resync.py`): a transient error spike
+(e.g. during a spray spin) never triggers it — the breach must be *sustained*; attempts are spaced
+by a cooldown so a stuck Gazebo can't be hammered; and it refuses to act on stale data ("never
+teleport onto a target the data doesn't support"). Every executed resync is announced on
+`/dt/resync_event`, shown on the GUI SYNC banner, and stamped into the evidence CSV's `resync`
+column; a failed Gazebo call raises a loud `/dt/alerts` instead.
+
+The piece that makes the teleport *honest*: in `both` mode `/dt/sim_pose` is Gazebo's
+**ground-truth** model pose (`worlds/burger_sim_gt.sdf` adds gz's PosePublisher to the stock
+burger; bridged as `/sim/ground_truth`), not integrated odometry. Odometry ignores teleports — a
+snap under the old source would have moved the robot while the number stayed wrong. Ground truth
+moves the pose, the LiDAR viewpoint and the measured error together. Bonus: this also solves
+start-up alignment — the sim always spawns at the map origin, the real robot stands wherever it
+stands, so the first 2D Pose Estimate puts the error out of tolerance and the twin snaps itself
+onto the real start within seconds.
+
 ---
 
 ## 5. The pure libraries (`algae_dt/lib/`)
@@ -357,6 +383,8 @@ any machine with plain `pytest`. The nodes are thin shells around them.
 | `pgm.py` | A tiny parser for the map image format (PGM), so the GUI doesn't depend on Qt image plugins. |
 | `hud.py` | Display helpers: battery color thresholds, battery %, laser points projected to x/y, status texts. |
 | `trajectory.py` | The obstacle's sine sweep + the keep-out clamp (distance from a point to the swept segment). |
+| `resync.py` | The drift-correction policy: WHEN may the twin snap the sim onto the real pose (manual = now, auto = sustained breach only, cooldown between attempts, stale/NaN data refuses). Immutable state, pure function. |
+| `gzcli.py` | The `gz service` CLI plumbing shared by `dynamic_obstacle` and `twin_resync`: request text composition (validated names, finite coordinates) + Boolean-reply parsing, with an injectable runner so tests never need a sim. |
 | `ros_utils.py` | The only ROS-adjacent helper module: the declare-and-get parameter idiom and the installed-map loaders (used by several nodes; previously copy-pasted). |
 
 ---

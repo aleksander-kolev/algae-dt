@@ -10,7 +10,7 @@ from algae_dt.lib import geometry as g
 
 def test_package_imports():
     import algae_dt  # noqa: F401
-    from algae_dt.lib import safety, blooms, sync, metrics, pgm  # noqa: F401
+    from algae_dt.lib import safety, blooms, sync, metrics, pgm, gzcli, resync  # noqa: F401
 
 
 def test_world_pixel_roundtrip():

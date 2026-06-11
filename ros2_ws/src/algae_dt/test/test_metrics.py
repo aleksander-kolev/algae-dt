@@ -20,16 +20,17 @@ def test_latency_ms_sign_and_value():
 def test_csv_header_columns():
     cols = M.csv_header().split(',')
     assert cols == ['stamp_s', 'dxy_m', 'dyaw_rad', 'sensor_err_m',
-                    'latency_ms', 'in_tolerance', 'stop_skew_ms']
+                    'latency_ms', 'in_tolerance', 'stop_skew_ms', 'resync']
 
 
 def test_csv_row_basic_formatting():
     row = M.csv_row(12.5, 0.1234, 0.05, 0.2, 123.4, True)
     fields = row.split(',')
-    assert len(fields) == 7
+    assert len(fields) == 8
     assert fields[0] == '12.5000'
     assert fields[5] == '1'           # in_tolerance True -> 1
     assert fields[6] == ''            # stop_skew omitted -> blank
+    assert fields[7] == ''            # no resync this tick -> blank
 
 
 def test_csv_row_in_tolerance_false_is_zero():
@@ -47,3 +48,15 @@ def test_csv_row_handles_inf_sensor_error():
 
 def test_csv_row_round_trips_through_header_width():
     assert len(M.csv_row(1, 2, 3, 4, 5, True, 6).split(',')) == len(M.csv_header().split(','))
+
+
+def test_csv_row_records_resync_tag():
+    # the tick a twin resync executed carries its trigger — drift CORRECTED, not just measured
+    assert M.csv_row(0.0, 0.0, 0.0, 0.0, 0.0, True, resync='auto').split(',')[7] == 'auto'
+    assert M.csv_row(0.0, 0.0, 0.0, 0.0, 0.0, True, resync='manual').split(',')[7] == 'manual'
+
+
+def test_csv_row_resync_tag_cannot_split_the_row():
+    # a comma inside a tag must never add a column (the CSV is parsed evidence)
+    row = M.csv_row(0.0, 0.0, 0.0, 0.0, 0.0, True, resync='a,b')
+    assert len(row.split(',')) == len(M.csv_header().split(','))

@@ -73,8 +73,12 @@ def _sim_mirror(pkg, world, headless, gz_gui):
     """both: the Gazebo mirror pushed entirely onto /sim/* (custom bridge + namespaced RSP).
     gz_gui works exactly as in sim_only — `both` is the PRIMARY graded lab demo and needs the same
     escape from the crash-prone gz 3D client (it previously had none short of headless, which also
-    killed the operator GUI)."""
-    model_sdf = _src('turtlebot3_gazebo', 'models', 'turtlebot3_burger', 'model.sdf')
+    killed the operator GUI).
+    The spawned model is worlds/burger_sim_gt.sdf: the STOCK burger merge-included untouched +
+    the gz PosePublisher system, which feeds the NAMED ground-truth pose the mediator publishes
+    as /dt/sim_pose and twin_resync teleports (see that file's header for why the scene
+    broadcaster's dynamic_pose/info could not provide it)."""
+    model_sdf = os.path.join(pkg, 'worlds', 'burger_sim_gt.sdf')
     urdf = _src('turtlebot3_gazebo', 'urdf', 'turtlebot3_burger.urdf')
     with open(urdf, 'r') as f:
         robot_desc = f.read()
@@ -198,6 +202,10 @@ def launch_setup(context, *args, **kwargs):
         # NEVER set name= on mission_runner (process-wide remap trap, BEST_APPROACHES).
         Node(package='algae_dt', executable='mission_runner', output='screen', parameters=common),
     ]
+    if mode == 'both':
+        # bounded-drift correction (Rubric ②): GUI RESYNC button + auto gz-teleport of the sim
+        # mirror onto the real robot once the pose error stays out of tolerance (twin.yaml §resync)
+        actions.append(Node(package='algae_dt', executable='twin_resync', output='screen', parameters=common))
     if not headless:
         actions.append(Node(package='algae_dt', executable='operator_gui', output='screen', parameters=common))
     if use_rviz:

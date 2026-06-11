@@ -43,3 +43,18 @@
   ros_type_name: "sensor_msgs/msg/LaserScan"
   gz_type_name: "gz.msgs.LaserScan"
   direction: GZ_TO_ROS
+
+# GROUND-TRUTH model pose (gz world frame == map frame by construction — the arena world is
+# built to the course map). /dt/sim_pose in `both` is derived from THIS, not /sim/odom, so a
+# twin_resync set_pose teleport genuinely moves the published pose, the LiDAR viewpoint and the
+# measured sync error together — and the sync discrepancy carries no sim-odom integration error.
+# Source: the PosePublisher system inside worlds/burger_sim_gt.sdf (NOT the scene broadcaster's
+# /world/<w>/dynamic_pose/info — its entries leave header.data empty, and the Pose_V->TFMessage
+# conversion reads exactly those, so every child_frame_id bridged as '' and the entity filter
+# could never match; verified live via docker/probe_ground_truth.sh). PosePublisher fills the
+# frame names per pose — the same mechanism that makes the diff-drive `tf` entry above work.
+- ros_topic_name: "/sim/ground_truth"
+  gz_topic_name: "/model/burger_sim/pose"
+  ros_type_name: "tf2_msgs/msg/TFMessage"
+  gz_type_name: "gz.msgs.Pose_V"
+  direction: GZ_TO_ROS

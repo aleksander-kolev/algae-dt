@@ -14,16 +14,22 @@ The three criteria → our deliverables:
 - **① Bidirectional** — `twin_mediator` fan-in/fan-out: `/scan`→twin, `/cmd_vel`→robot,
   `/sim/cmd_vel`→sim, **+ internal status topic** (`/dt/sync_ok`,`/dt/mode`).
 - **② Sync of states** — `sync_supervisor`: pose + **internal state that affects behavior**
-  (battery→auto-E-STOP, mode) mirrored near-real-time, measured error/latency + tolerances + alerts + CSV.
+  (battery→auto-E-STOP, mode) mirrored near-real-time, measured error/latency + tolerances + alerts + CSV
+  — **and bounded**: `twin_resync` corrects sustained out-of-tolerance pose drift (auto + GUI
+  RESYNC button; predict-with-the-model, correct-with-the-data), logged in the CSV `resync` column.
 - **③ Environmental** — 25 cm dual-LiDAR stop mirrored on BOTH robots + Nav2 dynamic-obstacle avoidance
   + navigate-and-spray; **introduce a live environment change** in the demo.
 
-## State: DONE — Phases 1→6 implemented, TDD, and integration-verified (see `docs/VERIFICATION.md`)
-**DONE:** 9 pure libs (safety/blooms/sync/metrics/geometry/pgm/hud/trajectory/occupancy) + 4 nodes
-(twin_mediator, sync_supervisor, mission_runner, operator_gui) + `fake_robot` + `dynamic_obstacle`;
+## State: DONE — Phases 1→7 implemented, TDD, and integration-verified (see `docs/VERIFICATION.md`)
+**DONE:** 11 pure libs (safety/blooms/sync/metrics/geometry/pgm/hud/trajectory/occupancy/resync/gzcli)
++ 5 nodes (twin_mediator, sync_supervisor, mission_runner, operator_gui, twin_resync) + `fake_robot`
++ `dynamic_obstacle`;
 full `bringup.launch.py` (sim_only | real_only | both, with `headless`/`use_rviz`/`use_fake_robot`);
-`/sim/*` bridge for `both`; reproducible **`algae-dt:dev`** Docker image (`docker/`, `docs/DOCKER.md`).
-**145 tests pass** + clean `colcon build`. The five old open items are RESOLVED & verified in-container:
+`/sim/*` bridge for `both` incl. the **ground-truth sim pose** (`/sim/ground_truth` ← PosePublisher
+in `worlds/burger_sim_gt.sdf`) and **bounded-drift resync** (`twin_resync`: GUI RESYNC button +
+auto-correct on sustained out-of-tolerance, CSV-stamped; live round-trip gated by
+`docker/both_smoke.sh`); reproducible **`algae-dt:dev`** Docker image (`docker/`, `docs/DOCKER.md`).
+**239 tests pass** + clean `colcon build`. The five old open items are RESOLVED & verified in-container:
 (1) `mode:=sim_only` smoke-tested (Nav2 active + AMCL localized, `/scan` flows) — `docker/sim_smoke.sh`;
 (2) gz↔ROS bridge confirmed (the stock spawn bundles `parameter_bridge`; `/scan /odom /cmd_vel /clock`
 reach ROS); (3) `both` `/sim/*` namespacing done (custom bridge + namespaced RSP, collision-free);
@@ -53,7 +59,9 @@ reach ROS); (3) `both` `/sim/*` namespacing done (custom bridge + namespaced RSP
    `mode:=real_only` via a manual `ros2 launch`) (`docs/RUN_ON_LAB_PC.md`). Validate the 25 cm stop on real `/scan`, AMCL
    2D-Pose-Estimate, one bloom navigate+spray, the `both` mirror.
 3. **Verify anytime:** `docker run --rm -v "$PWD/ros2_ws:/ws" -v "$PWD/docker:/ci" algae-dt:dev bash
-   /ci/ci.sh` (145 tests + build). Evidence map: `docs/VERIFICATION.md`.
+   /ci/ci.sh` (239 tests + build); `bash /ci/sim_smoke.sh` (sim_only stack) and `bash
+   /ci/both_smoke.sh` (live `both` mirror: ground-truth pose path + a real resync round-trip).
+   Evidence map: `docs/VERIFICATION.md`.
 
 > Re-implementing? The TDD recipe still holds: failing test (pure libs) → minimal impl → `colcon
 > build --packages-select algae_dt` → `pytest src/algae_dt/test` → run in `sim_only` → commit.

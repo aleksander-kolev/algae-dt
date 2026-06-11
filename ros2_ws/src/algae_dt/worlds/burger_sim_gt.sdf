@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<!-- The `both`-mode mirror robot: the STOCK turtlebot3_burger (merge-included untouched — D2:
+     never hand-edit the provided model; model:// resolves via GZ_SIM_RESOURCE_PATH which the
+     launch points at turtlebot3_gazebo/models) plus ONE addition: the gz PosePublisher system.
+
+     Why: /dt/sim_pose in `both` is the GROUND-TRUTH model pose. The scene broadcaster's
+     /world/<w>/dynamic_pose/info does carry every dynamic pose, but its entries leave the
+     header.data frame names empty, and ros_gz_bridge's Pose_V->TFMessage conversion reads exactly
+     those — every child_frame_id arrived '' (verified live, docker/probe_ground_truth.sh), so the
+     mediator could never filter out the robot. PosePublisher fills frame_id/child_frame_id per
+     pose (the same mechanism that makes the diff-drive plugin's `tf` output bridge correctly), so
+     /model/burger_sim/pose -> /sim/ground_truth carries a NAMED transform for the entity filter.
+     20 Hz: 4x the sync tick — cheap, and far below the 58 Hz the unnamed firehose ran at. -->
+<sdf version="1.9">
+  <model name="burger_sim">
+    <include merge="true">
+      <uri>model://turtlebot3_burger</uri>
+    </include>
+    <plugin filename="gz-sim-pose-publisher-system" name="gz::sim::systems::PosePublisher">
+      <publish_model_pose>true</publish_model_pose>
+      <publish_link_pose>false</publish_link_pose>
+      <publish_collision_pose>false</publish_collision_pose>
+      <publish_visual_pose>false</publish_visual_pose>
+      <publish_sensor_pose>false</publish_sensor_pose>
+      <publish_nested_model_pose>false</publish_nested_model_pose>
+      <use_pose_vector_msg>true</use_pose_vector_msg>
+      <update_frequency>20</update_frequency>
+    </plugin>
+  </model>
+</sdf>

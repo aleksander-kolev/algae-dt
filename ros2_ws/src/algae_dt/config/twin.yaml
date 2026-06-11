@@ -94,6 +94,28 @@
     sim_only_sync_source: commanded   # commanded => mediator publishes the integrated-command shadow
                                       # as /dt/real_pose (the sim_only sync source); none => no shadow.
 
+    # --- both-mode pose RESYNC (Rubric ②: drift stays BOUNDED, not just measured) ---
+    # The mirror sim follows the gated commands OPEN-LOOP, so its pose error vs the real Burger
+    # accumulates (wheel slip, motor lag, physics mismatch — the measured divergence doubles as an
+    # actuation-health diagnostic). twin_resync closes the loop ("predict with the model, correct
+    # with the data"): it teleports the sim entity onto the real robot's /dt/real_pose via gz
+    # set_pose — on the operator's RESYNC button (/dt/resync_cmd) any time, or AUTOMATICALLY once
+    # the pose error stays beyond tol_pose_* above for resync_sustain_s. Works because
+    # /dt/sim_pose in `both` is gz GROUND TRUTH (sim_bridge.yaml /sim/ground_truth): the teleport
+    # moves pose + LiDAR view + measured error together. Every execution lands in the CSV's
+    # `resync` column (evidence drift was corrected); a failed gz call raises /dt/alerts.
+    world: default                 # gz world name (worlds/algae_arena.world <world name='default'>);
+                                   # shared with dynamic_obstacle — same world, single source.
+    sim_entity_name: burger_sim    # the mirror entity bringup.launch.py spawns in `both`
+    resync_auto_enable: true       # false => RESYNC button only (fully operator-controlled takes)
+    resync_sustain_s: 5.0          # the error must stay out of tolerance this long before an auto
+                                   # snap — a transient spray-spin spike must not teleport the twin
+    resync_cooldown_s: 8.0         # min spacing between resync ATTEMPTS (button included): a
+                                   # failing gz call / hammered button can never teleport-storm
+    resync_tick_hz: 2.0            # policy evaluation rate (decisions, not motion — cheap)
+    resync_z_m: 0.01               # teleport z = the launch's sim spawn z (_sim_mirror)
+    set_pose_timeout_ms: 500       # gz set_pose service budget; shared with dynamic_obstacle
+
     # --- operator console liveness ---
     gui_alert_hold_s: 0.0          # how long (wall s) the console holds an alert banner RED after
                                    # the last /dt/alerts message. 0 = auto = max(10, 3*alert_repeat_s),

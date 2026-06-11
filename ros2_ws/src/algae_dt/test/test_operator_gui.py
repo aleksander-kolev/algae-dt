@@ -19,7 +19,7 @@ from rclpy.node import Node                               # noqa: E402
 from rclpy.qos import (DurabilityPolicy, QoSProfile,      # noqa: E402
                        ReliabilityPolicy)
 from sensor_msgs.msg import BatteryState                   # noqa: E402
-from std_msgs.msg import Bool, Float64, String             # noqa: E402
+from std_msgs.msg import Bool, Empty, Float64, String      # noqa: E402
 from visualization_msgs.msg import MarkerArray            # noqa: E402
 
 from algae_dt import operator_gui                          # noqa: E402
@@ -37,9 +37,12 @@ class Harness(Node):
         self.last_blooms = None
         self.last_cmd = None
         self.last_estop = None
+        self.resync_clicks = 0
         self.create_subscription(MarkerArray, '/dt/blooms', lambda m: setattr(self, 'last_blooms', m), _latched())
         self.create_subscription(String, '/dt/mission_cmd', lambda m: setattr(self, 'last_cmd', m.data), 10)
         self.create_subscription(Bool, '/dt/estop_cmd', lambda m: setattr(self, 'last_estop', m.data), _latched())
+        self.create_subscription(Empty, '/dt/resync_cmd',
+                                 lambda m: setattr(self, 'resync_clicks', self.resync_clicks + 1), 10)
 
 
 def _spin_until(ex, pred, secs=6.0):
@@ -133,6 +136,61 @@ def test_bridge_ingests_alerts():
         ex.shutdown()
         bridge.destroy_node()
         pub.destroy_node()
+        rclpy.shutdown()
+
+
+def test_bridge_publishes_and_ingests_resync():
+    """RESYNC is operator-facing both ways: request_resync() publishes /dt/resync_cmd, and an
+    executed /dt/resync_event lands on the bridge for the SYNC banner note."""
+    rclpy.init()
+    bridge = GuiBridge()
+    har = Harness()
+    p_evt = har.create_publisher(String, '/dt/resync_event', 10)
+    ex = SingleThreadedExecutor()
+    ex.add_node(bridge)
+    ex.add_node(har)
+    try:
+        bridge.request_resync()
+        assert _spin_until(ex, lambda: har.resync_clicks == 1), \
+            "request_resync() must publish one /dt/resync_cmd"
+        p_evt.publish(String(data='manual dxy=0.21 dyaw=0.04 -> sim snapped to (1.00, 0.50, 0.00)'))
+        assert _spin_until(ex, lambda: bridge.last_resync.startswith('manual'))
+        assert bridge.last_resync_t > float('-inf')
+    finally:
+        ex.shutdown()
+        bridge.destroy_node()
+        har.destroy_node()
+        rclpy.shutdown()
+
+
+def test_resync_button_enabled_only_in_both_mode():
+    """Only `both` has a mirror sim to snap: the RESYNC TWIN button must track /dt/mode (disabled
+    in sim_only/real_only, enabled in both), and a recent resync event must surface on the SYNC
+    banner."""
+    from PyQt5 import QtWidgets
+    rclpy.init()
+    bridge = GuiBridge()
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    win = operator_gui._make_window(bridge)
+    try:
+        win._spin.stop()
+        win._repaint.stop()                               # drive _refresh by hand
+        assert not win.buttons['RESYNC TWIN'].isEnabled(), "disabled until the mode is known"
+        bridge.mode = 'sim_only'
+        win._refresh()
+        assert not win.buttons['RESYNC TWIN'].isEnabled()
+        bridge.mode = 'both'
+        win._refresh()
+        assert win.buttons['RESYNC TWIN'].isEnabled()
+
+        import time as _time
+        bridge.last_resync = 'auto dxy=0.31 dyaw=0.05 -> sim snapped to (1.20, 0.45, 1.57)'
+        bridge.last_resync_t = _time.monotonic()
+        win._refresh()
+        assert 'resynced (auto)' in win.banners['sync'].text(), \
+            "a recent resync must surface on the SYNC banner"
+    finally:
+        bridge.destroy_node()
         rclpy.shutdown()
 
 

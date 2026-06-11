@@ -12,8 +12,6 @@ Run alongside a sim_only/both launch:
 from __future__ import annotations
 
 import functools
-import re
-import subprocess
 import time
 
 import rclpy
@@ -22,7 +20,7 @@ from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
 
-from algae_dt.lib import trajectory
+from algae_dt.lib import gzcli, trajectory
 from algae_dt.lib.ros_utils import declare_get
 
 
@@ -92,13 +90,8 @@ class DynamicObstacle(Node):
     def _now(self) -> float:
         return self.get_clock().now().nanoseconds * 1e-9
 
-    @staticmethod
-    def _safe_token(value: str, label: str) -> str:
-        """Reject gz entity names/worlds that would break the protobuf --req text (quotes/braces/
-        whitespace): validate at the boundary, fail fast (RULES §C) instead of emitting a bad request."""
-        if not re.fullmatch(r'[A-Za-z0-9_.-]+', value or ''):
-            raise ValueError(f"{label} must match [A-Za-z0-9_.-]+ (got {value!r})")
-        return value
+    # boundary validation shared with twin_resync (lib.gzcli, unit-tested there)
+    _safe_token = staticmethod(gzcli.safe_token)
 
     def _tick(self) -> None:
         if self._refused:
@@ -129,20 +122,14 @@ class DynamicObstacle(Node):
                 self._set_pose_fails = 0
 
     def _gz(self, service: str, reqtype: str, req: str, timeout_ms: int = 300) -> bool:
-        """Call a gz Boolean service; return True iff it replied `data: true`. Best-effort: a missing
-        sim / timeout logs a throttled warning and returns False so the caller can retry (never a
-        silent give-up, RULES §C)."""
-        try:
-            r = subprocess.run(
-                ['gz', 'service', '-s', service, '--reqtype', reqtype,
-                 '--reptype', 'gz.msgs.Boolean', '--timeout', str(timeout_ms), '--req', req],
-                check=False, capture_output=True, text=True,
-                timeout=max(1.0, timeout_ms / 1000.0 + 1.0))
-            return 'data: true' in (r.stdout or '')
-        except Exception as exc:                          # pragma: no cover - demo tool, gz-only
-            self.get_logger().warn(f"gz {service} failed (sim running?): {exc}",
-                                   throttle_duration_sec=2.0)
-            return False
+        """Call a gz Boolean service via the shared lib.gzcli; True iff it replied `data: true`.
+        Best-effort: ANY failure (missing sim, timeout, false reply) logs a throttled warning and
+        returns False so the caller can retry — never a silent give-up (RULES §C; the old inline
+        version silently swallowed non-exception failures despite promising this warning)."""
+        ok, diag = gzcli.call_boolean(service, reqtype, req, timeout_ms)
+        if not ok:
+            self.get_logger().warn(f"gz {service} failed: {diag}", throttle_duration_sec=2.0)
+        return ok
 
     def _spawn(self) -> bool:
         sdf = get_package_share_directory('algae_dt') + '/worlds/obstacle_box.sdf'

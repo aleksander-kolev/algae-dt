@@ -53,9 +53,12 @@ home with a kinematic stand-in, no hardware).
 | `docs/SUBMISSION.md` / `docs/DEMO_SCRIPT.md` | PoC submission package + timed 2–3 min demo script. |
 
 ## Status
-**Implemented and tested.** All 9 pure libs + 4 nodes (+ `fake_robot`, `dynamic_obstacle`) are
-done with **145 passing tests** (unit + in-process rclpy integration) and a clean
+**Implemented and tested.** All 11 pure libs + 5 nodes (+ `fake_robot`, `dynamic_obstacle`) are
+done with **239 passing tests** (unit + in-process rclpy integration) and a clean
 `colcon build --packages-select algae_dt`. `sim_only` launches end-to-end headless (Nav2 active +
 AMCL auto-localized, the TwistStamped chokepoint, all `/dt/*` flowing); `both` keeps the real (bare)
-and sim (`/sim/*`) topics collision-free with the mediator fanning out to both. The full
-navigate-and-spray demo runs at GPU-rate LiDAR (lab laptop / GPU host) — see `docs/VERIFICATION.md`.
+and sim (`/sim/*`) topics collision-free with the mediator fanning out to both, publishes the sim's
+**ground-truth pose**, and **bounds the real-vs-sim drift** (`twin_resync`: GUI RESYNC button +
+auto-correct on sustained out-of-tolerance, every correction CSV-logged; live round-trip gated by
+`docker/both_smoke.sh`). The full navigate-and-spray demo runs at GPU-rate LiDAR (lab laptop / GPU
+host) — see `docs/VERIFICATION.md`.

@@ -362,38 +362,37 @@ def test_real_mode_starts_estop_held_until_first_healthy_battery():
         rclpy.shutdown()
 
 
-def test_both_mode_sim_pose_lifted_to_map_frame_via_tf():
-    """In `both`, /dt/sim_pose must be lifted into the MAP frame using the same map<-odom as the real
-    robot, so it is directly comparable to /dt/real_pose — not published raw in the sim's odom frame
-    (which would make the sync discrepancy carry the whole map<-odom offset). With map<-odom =
-    (1, 2, 90deg) and a /sim/odom pose (1, 0, 0), /dt/sim_pose must be the composed map pose
-    (1, 3, 90deg)."""
+def test_both_mode_sim_pose_is_gz_ground_truth_filtered_by_entity():
+    """In `both`, /dt/sim_pose is the gz GROUND-TRUTH pose of the mirror entity (bridged Pose_V ->
+    TFMessage on /sim/ground_truth), published verbatim (world frame == map frame by construction)
+    and FILTERED to sim_entity_name — other entities (the dynamic obstacle box) must never leak
+    onto the twin's pose. Ground truth (not /sim/odom) is what makes a twin_resync teleport real:
+    pose, LiDAR view and the measured sync error move together."""
     from geometry_msgs.msg import TransformStamped
-    from tf2_ros import StaticTransformBroadcaster
+    from tf2_msgs.msg import TFMessage
 
     from algae_dt.lib.geometry import quaternion_from_yaw
 
     rclpy.init()
     med = TwinMediator(parameter_overrides=[Parameter('mode', Parameter.Type.STRING, 'both')])
     har = rclpy.create_node('both_sim_harness')
-    stb = StaticTransformBroadcaster(har)
-    tf = TransformStamped()
-    tf.header.frame_id = 'map'
-    tf.child_frame_id = 'odom'
-    tf.transform.translation.x = 1.0
-    tf.transform.translation.y = 2.0
-    tf.transform.rotation.z, tf.transform.rotation.w = quaternion_from_yaw(math.pi / 2)
-    stb.sendTransform(tf)
-    p_sim_odom = har.create_publisher(Odometry, '/sim/odom', 10)
+    p_gt = har.create_publisher(TFMessage, '/sim/ground_truth', 10)
     got = {'p': None}
     har.create_subscription(PoseStamped, '/dt/sim_pose', lambda m: got.update(p=m), 10)
 
+    def _tf(name: str, x: float, y: float, yaw: float) -> TransformStamped:
+        t = TransformStamped()
+        t.header.frame_id = 'default'          # the gz world name, as the bridge emits it
+        t.child_frame_id = name
+        t.transform.translation.x = float(x)
+        t.transform.translation.y = float(y)
+        t.transform.rotation.z, t.transform.rotation.w = quaternion_from_yaw(yaw)
+        return t
+
     def _emit() -> None:
-        od = Odometry()
-        od.header.frame_id = 'odom'
-        od.pose.pose.position.x = 1.0
-        od.pose.pose.orientation.w = 1.0
-        p_sim_odom.publish(od)
+        # the obstacle FIRST: the mediator must skip it and pick the burger_sim entry
+        p_gt.publish(TFMessage(transforms=[_tf('algae_obstacle', 9.0, 9.0, 0.0),
+                                           _tf('burger_sim', 1.0, 2.0, math.pi / 2)]))
     har.create_timer(1.0 / 30.0, _emit)
 
     ex = SingleThreadedExecutor()
@@ -401,11 +400,13 @@ def test_both_mode_sim_pose_lifted_to_map_frame_via_tf():
     ex.add_node(har)
     try:
         ok = _spin_until(ex, lambda: got['p'] is not None
-                         and got['p'].header.frame_id == 'map'
-                         and got['p'].pose.position.y > 2.5, secs=8.0)
-        assert ok, "/dt/sim_pose in `both` must be composed into the map frame via map<-odom"
-        assert abs(got['p'].pose.position.x - 1.0) < 0.15
-        assert abs(got['p'].pose.position.y - 3.0) < 0.15
+                         and got['p'].header.frame_id == 'map', secs=8.0)
+        assert ok, "/dt/sim_pose in `both` must come from /sim/ground_truth"
+        assert abs(got['p'].pose.position.x - 1.0) < 1e-6
+        assert abs(got['p'].pose.position.y - 2.0) < 1e-6, \
+            "the obstacle's pose must never leak onto /dt/sim_pose (entity filter)"
+        from algae_dt.lib.geometry import pose_xyyaw
+        assert abs(pose_xyyaw(got['p'].pose)[2] - math.pi / 2) < 1e-6
     finally:
         ex.shutdown()
         med.destroy_node()

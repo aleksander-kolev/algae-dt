@@ -59,6 +59,21 @@ Confirmed before implementation:
   control), but `spin()` is a viable alternative if we want Nav2 to own the rotation.
 
 ## Lessons & gotchas (APPEND as you learn)
+- **A twin that only measures drift is half a twin — and a teleport "resync" is fake unless the
+  published sim pose is gz GROUND TRUTH.** The `both` mirror follows the gated commands open-loop,
+  so pose error accumulates without bound; the predict/correct pattern (sim = predictor, real
+  pose = corrector) is what bounds it: twin_resync snaps the sim onto `/dt/real_pose` via gz
+  `set_pose` (operator RESYNC button + auto after a sustained out-of-tolerance). Three traps paid
+  for here: (1) an odom-derived `/dt/sim_pose` IGNORES teleports (odom integrates wheels), so the
+  measured error could never be corrected — the sim pose had to switch to ground truth;
+  (2) the scene broadcaster's `/world/<w>/dynamic_pose/info` bridges with EMPTY frame names (its
+  Pose_V entries don't fill `header.data`, which is all the `Pose_V→TFMessage` conversion reads —
+  verified live, `docker/probe_ground_truth.sh`); the fix is the gz **PosePublisher** system on
+  the model (`worlds/burger_sim_gt.sdf`: stock burger merge-included + that one plugin), which
+  fills the names exactly like the diff-drive `tf` output does; (3) correction must be POLICED —
+  sustain (a spray-spin spike must not teleport), cooldown (a failing gz call must not storm),
+  stale-input refusal (never teleport onto data you don't trust) — all pure + unit-tested in
+  `lib/resync.py`. End-to-end gate: `docker/both_smoke.sh` (live resync round-trip).
 - **`tf2_echo` lies under sim time.** The CLI uses wall clock; verify TF via `ros2 topic echo /tf |
   grep frame_id` or a node with `use_sim_time:=true`.
 - **`BasicNavigator(node_name='…')`** is accepted on Jazzy (`__init__(self, node_name='basic_navigator',

@@ -9,13 +9,15 @@ pure libs, integration-tested in `sim_only` before it ever goes to the lab. Task
 > exact triggers. **Option A is mandatory** (Option B caps at 7/12). Submission package + demo script:
 > `docs/SUBMISSION.md`, `docs/DEMO_SCRIPT.md`. Due **Mon 22 Jun 2026 21:00**.
 
-> **IMPLEMENTATION STATUS — Phases 1→6 DONE, TDD, integration-verified.** All 9 pure libs + 4 nodes
+> **IMPLEMENTATION STATUS — Phases 1→7 DONE, TDD, integration-verified.** All 11 pure libs + 5 nodes
 > (+ `fake_robot`, `dynamic_obstacle`) implemented; full `bringup.launch.py` (sim_only|real_only|both
-> + headless/use_fake_robot); reproducible `algae-dt:dev` image. **145 tests pass** + clean
+> + headless/use_fake_robot); reproducible `algae-dt:dev` image. **239 tests pass** + clean
 > `colcon build`; `sim_only` runs end-to-end headless (Nav2 active, AMCL localized, TwistStamped
-> chokepoint); `both` collision-free. Evidence per deliverable → `docs/VERIFICATION.md`. Remaining is
-> NON-code: the Week-9 demo video + lab-hardware validation, and the full navigate-and-spray demo on a
-> GPU host (headless GPU-less Docker throttles Nav2 at ~2 Hz software-render LiDAR — see VERIFICATION).
+> chokepoint); `both` collision-free with **ground-truth sim pose + bounded-drift resync** (live
+> round-trip gated by `docker/both_smoke.sh`). Evidence per deliverable → `docs/VERIFICATION.md`.
+> Remaining is NON-code: the Week-9 demo video + lab-hardware validation, and the full
+> navigate-and-spray demo on a GPU host (headless GPU-less Docker throttles Nav2 at ~2 Hz
+> software-render LiDAR — see VERIFICATION).
 
 > Migration note: port reusable logic from the old `algae-twin` repo's pure libs
 > (`geometry/safety/blooms/sync/pgm`) — they're ROS-free and already unit-tested — and DROP all the
@@ -152,6 +154,19 @@ downloads — our nodes are exactly pub/sub built on this primitive), ROS 2 topi
 - **T6.3** Week-9 video: clean run + every RUBRIC_MAP evidence clip. **Pre-record the full `sim_only`
   run at home as the guaranteed baseline video BEFORE the hardware phase**, so a submittable video
   exists even if late lab sessions fail; swap in `both`/real footage if it's clean.
+
+## Phase 7 — Bounded-drift resync ("predict with the model, correct with the data")  → Rubric ② DONE
+- [x] **T7.1** `twin_resync` + `lib/resync.py` (pure policy: manual-fires-now, auto needs a
+  SUSTAINED out-of-tolerance, cooldown spaces attempts, stale inputs refuse) + `lib/gzcli.py`
+  (shared `gz service` helpers, extracted from `dynamic_obstacle`). GUI **RESYNC TWIN** button
+  (`/dt/resync_cmd`) + `/dt/resync_event` → SYNC banner note + CSV `resync` column.
+  `/dt/sim_pose` in `both` switched to **gz GROUND TRUTH** (`worlds/burger_sim_gt.sdf` PosePublisher
+  → `/sim/ground_truth`; the scene broadcaster's `dynamic_pose/info` bridges with empty frame names
+  — see BEST_APPROACHES §Lessons), which is what makes the teleport genuinely correct pose + LiDAR
+  view + measured error together, and solves the `both` start-alignment gap (the first 2D Pose
+  Estimate puts the error out of tolerance → the twin auto-snaps to the real start).
+  TDD: `test_resync.py` (12) + `test_gzcli.py` (9) + `test_twin_resync.py` (6) + extended
+  metrics/supervisor/GUI/mediator tests; end-to-end `docker/both_smoke.sh` (live resync round-trip).
 
 ---
 

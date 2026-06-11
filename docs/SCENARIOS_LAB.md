@@ -30,14 +30,23 @@ Concise run scenarios. Setup commands → `docs/SETUP.md`. Each scenario: **step
 
 ## S4 · `both` mode — twin mirror (pillars ①②③)
 - `./scripts/lab_run.sh` (full `both` demo); real leads, sim mirrors. Place blooms → Start.
+- **Start-alignment is automatic:** the sim always spawns at the map origin while the real Burger
+  stands wherever it stands — after the 2D Pose Estimate the pose error exceeds tolerance, and
+  twin_resync **auto-snaps the sim onto the real pose** within ~`resync_sustain_s` (or press
+  **RESYNC TWIN** immediately). Verify `/dt/sync_ok` goes green before Start.
 - **Expected:** both robots move 1:1; `/dt/sync_ok` green; obstacle in EITHER world stops BOTH;
-  `sync_metrics_*.csv` logs Δxy/latency/stop_skew; sim on `/sim/*` only (no collision).
+  `sync_metrics_*.csv` logs Δxy/latency/stop_skew/resync; sim on `/sim/*` only (no collision).
 - **If-not:** topic collision (sim not namespaced) / domain mismatch / sim cmd_vel type unverified.
 
-## S5 · State sync & alerts (pillar ②)
-- During S4, nudge the sim out of tolerance (or block one scan).
-- **Expected:** `/dt/sync_ok` flips, GUI banner amber/red, `/dt/alerts` fires, CSV row logged.
-- **If-not:** thresholds in `twin.yaml`; supervisor running; both poses present.
+## S5 · State sync, alerts & resync (pillar ②)
+- During S4, nudge the sim out of tolerance (or block one scan). Let drift accumulate (the spray
+  spins are the biggest generator) or carry the real robot half a metre.
+- **Expected:** `/dt/sync_ok` flips, GUI banner amber/red, `/dt/alerts` fires, CSV row logged;
+  after `resync_sustain_s` of sustained breach the twin **auto-resyncs** (sim teleports onto the
+  real pose, error collapses on the live banner, the CSV row carries `auto` in its `resync`
+  column). **RESYNC TWIN** does the same on demand — both are demo beats, not failures.
+- **If-not:** thresholds in `twin.yaml`; supervisor + twin_resync running; both poses present;
+  a `RESYNC FAILED` alert = the gz set_pose call (sim up? world name `default`?).
 
 ## S6 · E-STOP (safety headline)
 - Hit E-STOP (button / Space / Esc) mid-mission.
