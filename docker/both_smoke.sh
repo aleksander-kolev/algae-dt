@@ -8,6 +8,8 @@
 # shellcheck disable=SC1091  # ROS/colcon setup files are generated at runtime; not followable here
 set -o pipefail
 source /opt/ros/jazzy/setup.bash
+export ROS_LOCALHOST_ONLY=1            # never cross-talk with a concurrently running demo container
+export ROS_DOMAIN_ID="${CI_ROS_DOMAIN_ID:-78}"
 cd /ws || exit 1
 echo "=== build ==="
 colcon build --packages-select algae_dt >/tmp/build.log 2>&1 || { echo "BUILD FAILED"; tail -20 /tmp/build.log; exit 1; }

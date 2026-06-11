@@ -186,6 +186,16 @@ def launch_setup(context, *args, **kwargs):
         # nav_goal_timeout_s still bounds a truly stuck goal.
         rewrites['movement_time_allowance'] = '30.0'
         rewrites['required_movement_radius'] = '0.1'
+    elif mode == 'both' and use_fake_robot:
+        # Hardware-free `both` (the home/dev rig): the fake robot deterministically starts at the
+        # map origin == the sim spawn (the same coupling contract as sim_only's auto-seed), so
+        # seed AMCL there instead of racing the operator's RViz click against Nav2's ~60 s
+        # costmap-activation fuse. Losing that race aborted the whole Nav2 bringup ("Failed to
+        # bring up all requested nodes") -> every mission goal failed instantly while the launch
+        # looked alive. The real lab `both` (no fake robot) keeps the operator 2D-Pose-Estimate
+        # flow. source_timeout matches sim_only: the home rig is the same throttled environment.
+        rewrites['set_initial_pose'] = 'True'
+        rewrites['source_timeout'] = '2.0'
     nav2_params = RewrittenYaml(
         source_file=_src('turtlebot3_navigation2', 'param', 'burger.yaml'),
         param_rewrites=rewrites, convert_types=True)

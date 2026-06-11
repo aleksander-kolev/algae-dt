@@ -32,7 +32,7 @@ docker run --rm -v "$PWD/ros2_ws:/ws" -v "$PWD/docker:/ci" algae-dt:dev bash /ci
 | `lib/geometry.py` | world↔pixel (floor semantics: off-map stays off-map), yaw↔quaternion, angle wrap, shared pose/MapInfo helpers | `test_geometry.py` (14) |
 | `lib/pgm.py` | P5/P2 parser incl. the real 86×110 course map | `test_pgm.py` (9) |
 | `lib/hud.py` | battery colour thresholds, scan projection, status text | `test_hud.py` (5) |
-| `lib/occupancy.py` | static-map goal projection / `reachable_goal` (off-wall + edge-aware clearance, off-map rejection) | `test_occupancy.py` (14) |
+| `lib/occupancy.py` | static-map goal projection / `reachable_goal` (off-wall + edge-aware clearance, off-map rejection) + `raycast_scan` (the fake robot's map-true synthetic LiDAR: LDS-02 blind-spot 0.0, no-return inf, range_max, yaw geometry — incl. on the real course map) | `test_occupancy.py` (21) |
 | `lib/trajectory.py` | dynamic-obstacle sinusoidal sweep + spawn keep-out clamp | `test_trajectory.py` (10) |
 
 ## Pillar ① — Bidirectional (fan-in / fan-out)

@@ -173,3 +173,83 @@ def test_reachable_goal_cap_rejects_existing_but_too_far_clear_cell():
     # generous cap (0.80 m = 16 px) can reach it -> a real projected goal
     out = occupancy.reachable_goal(grid, mi, tx, ty, clearance_m=0.15, max_projection_m=0.80)
     assert out is not None and out[0] > tx
+
+
+# --------------------------------------------------------------- raycast_scan
+def _mi(w: int = 10, h: int = 10, res: float = 0.1) -> geometry.MapInfo:
+    return geometry.MapInfo(resolution=res, origin_x=0.0, origin_y=0.0, width_px=w, height_px=h)
+
+
+_WALLED = _grid(['.......#..'] * 10)      # vertical wall at col 7 -> x in [0.7, 0.8)
+
+
+def test_raycast_hits_the_wall_at_the_right_distance():
+    trig = occupancy.beam_trig(1, 0.0, 0.0)         # one beam straight ahead
+    (r,) = occupancy.raycast_scan(_WALLED, _mi(), 0.25, 0.55, 0.0, trig=trig,
+                                  range_min=0.12, range_max=3.5)
+    # wall face at x=0.7, robot at x=0.25 -> 0.45 m, +/- one 0.05 m march step
+    assert abs(r - 0.45) <= 0.05 + 1e-9
+
+
+def test_raycast_open_beam_is_no_return_inf():
+    trig = occupancy.beam_trig(1, 0.0, 0.0)
+    (r,) = occupancy.raycast_scan(_WALLED, _mi(), 0.25, 0.55, 3.14159265, trig=trig,
+                                  range_min=0.12, range_max=3.5)   # facing -x: leaves the map
+    assert r == float('inf')
+
+
+def test_raycast_yaw_rotates_the_beams():
+    # same pose, facing +y: the col-7 wall is no longer ahead -> no return
+    trig = occupancy.beam_trig(1, 0.0, 0.0)
+    (r,) = occupancy.raycast_scan(_WALLED, _mi(), 0.25, 0.55, 1.5707963, trig=trig,
+                                  range_min=0.12, range_max=3.5)
+    assert r == float('inf')
+
+
+def test_raycast_blind_spot_reads_zero_like_the_lds02():
+    # a hit closer than range_min must read 0.0 ("no return"), the documented LDS-02 blind spot
+    trig = occupancy.beam_trig(1, 0.0, 0.0)
+    (r,) = occupancy.raycast_scan(_WALLED, _mi(), 0.65, 0.55, 0.0, trig=trig,
+                                  range_min=0.12, range_max=3.5)   # wall face only ~0.05 m ahead
+    assert r == 0.0
+
+
+def test_raycast_respects_range_max():
+    trig = occupancy.beam_trig(1, 0.0, 0.0)
+    (r,) = occupancy.raycast_scan(_WALLED, _mi(), 0.05, 0.55, 0.0, trig=trig,
+                                  range_min=0.12, range_max=0.5)   # wall at 0.65 > range_max
+    assert r == float('inf')
+
+
+def test_raycast_multi_beam_geometry_matches_lds_layout():
+    # 4 beams from -pi step pi/2 (the LDS layout shape): indices = [back, right, FRONT, left].
+    # Facing +x with the wall ahead: only the FRONT beam (index 2) sees it; right/left exit the
+    # arena; the back beam exits at x<0.
+    trig = occupancy.beam_trig(4, -3.14159265, 1.5707963)
+    rr = occupancy.raycast_scan(_WALLED, _mi(), 0.25, 0.55, 0.0, trig=trig,
+                                range_min=0.12, range_max=3.5)
+    assert rr[0] == float('inf') and rr[1] == float('inf') and rr[3] == float('inf')
+    assert abs(rr[2] - 0.45) <= 0.05 + 1e-9
+
+
+def test_raycast_on_the_real_course_map_sees_walls():
+    # the actual 86x110 course map: from the spawn (0,0) facing +x SOME beams must return finite
+    # wall hits and they must respect [range_min, range_max] (proves the inlined pixel transform
+    # agrees with the real map geometry end-to-end)
+    from algae_dt.lib.ros_utils import load_package_map
+
+    try:
+        img = load_package_map()
+    except Exception:
+        import pytest
+        pytest.skip("installed course map not available on this host")
+    grid = occupancy.from_pgm(img)
+    mi = geometry.MapInfo(resolution=0.05, origin_x=-2.051, origin_y=-4.194,
+                          width_px=86, height_px=110)
+    trig = occupancy.beam_trig(360, -3.14159265, 2 * 3.14159265 / 360)
+    rr = occupancy.raycast_scan(grid, mi, 0.0, 0.0, 0.0, trig=trig,
+                                range_min=0.12, range_max=3.5)
+    finite = [r for r in rr if r != float('inf') and r > 0.0]
+    assert len(finite) > 90, "from the arena centre most beams should hit walls"
+    assert all(0.12 <= r <= 3.5 + 1e-9 for r in finite)
+    assert len(set(round(r, 2) for r in finite)) > 5, "a real arena is not a uniform ring"

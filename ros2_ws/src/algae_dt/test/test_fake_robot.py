@@ -84,6 +84,40 @@ def test_fake_robot_integrates_cmd_and_publishes_sensors():
         rclpy.shutdown()
 
 
+def test_fake_robot_scan_is_raycast_from_the_course_map():
+    """The stand-in's LiDAR must see the ACTUAL arena (lib.occupancy.raycast_scan), not a fictional
+    uniform ring — that is what lets AMCL localize on it, keeps the real-vs-sim sensor delta
+    meaningful (pillar ②), and makes a wall genuinely trip the 25 cm gate. From the origin spawn:
+    many finite wall returns, non-uniform, all honestly inside [range_min, range_max]."""
+    rclpy.init()
+    bot = FakeRobot()
+    if bot._grid is None:                       # no installed map on this host: the fallback path
+        bot.destroy_node()                      # is exercised by the other tests; skip the map one
+        rclpy.shutdown()
+        pytest.skip("installed course map not available")
+    got = {}
+    watcher = rclpy.create_node('scan_watcher')
+    from rclpy.qos import qos_profile_sensor_data
+    watcher.create_subscription(LaserScan, '/scan', lambda m: got.update(s=m), qos_profile_sensor_data)
+    ex = SingleThreadedExecutor()
+    ex.add_node(bot)
+    ex.add_node(watcher)
+    try:
+        assert _spin_until(ex, lambda: 's' in got), "fake robot publishes /scan"
+        rr = list(got['s'].ranges)
+        assert len(rr) == 360
+        finite = [r for r in rr if r != float('inf') and r > 0.0]
+        assert len(finite) > 90, "from the arena origin most beams should return wall hits"
+        assert all(0.12 <= r <= 3.5 + 1e-6 for r in finite), "honest [range_min, range_max] returns"
+        assert len(set(round(r, 2) for r in finite)) > 5, \
+            "a real arena is not a uniform ring (the old flat-3.0 scan must be gone)"
+    finally:
+        ex.shutdown()
+        bot.destroy_node()
+        watcher.destroy_node()
+        rclpy.shutdown()
+
+
 def test_fake_robot_stops_on_cmd_silence_like_the_real_burger():
     """The real turtlebot3_node halts when /cmd_vel goes silent; the stand-in must mirror that
     (max_cmd_age_s) instead of coasting forever on the last command and drifting off the map."""

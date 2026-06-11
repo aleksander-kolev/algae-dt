@@ -12,6 +12,16 @@ odom -> base_footprint (dynamic, like the real odometry) plus the static base_fo
 base_link -> base_scan links from the burger URDF. (Broadcasting only odom->base_link left
 base_scan unresolvable: every laser TF lookup failed and Nav2 was dead in the hardware-free path.)
 
+LiDAR: the scan is RAYCAST FROM THE COURSE MAP (lib.occupancy.raycast_scan) at the robot's pose —
+a real synthetic LDS-02, not a fictional uniform ring. The flat-ring scan made the hardware-free
+`both` demo incoherent: AMCL had nothing to correlate (it never truly localized), the real-vs-sim
+sensor delta was out of tolerance whenever the gz mirror was within ~3 m of a wall (SYNC red from
+t=0), and driving at a wall never tripped the 25 cm gate. With the map scan all three behave.
+The odom frame == the map frame BY CONSTRUCTION (the robot starts at the origin and `both
+use_fake_robot` auto-seeds AMCL there — the same coupling contract as sim_only's spawn), so the
+integrated pose is the raycast pose. `fake_front_m` > 0 still injects a scripted obstacle dead
+ahead (min with the map return; 0 = off) for the safety-stop test beat.
+
 Real-robot fidelity: the real turtlebot3_node STOPS when /cmd_vel goes silent; the fake robot
 mirrors that with max_cmd_age_s — it must never coast forever on a stale command.
 """
@@ -29,8 +39,8 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import BatteryState, LaserScan
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
-from algae_dt.lib import geometry, hud, sync
-from algae_dt.lib.ros_utils import declare_get
+from algae_dt.lib import geometry, hud, occupancy, sync
+from algae_dt.lib.ros_utils import declare_get, load_map_yaml, load_package_map
 
 # Burger URDF static offsets (metres): base_footprint -> base_link, base_link -> base_scan.
 _BASE_LINK_Z = 0.010
@@ -42,8 +52,10 @@ class FakeRobot(Node):
         super().__init__('fake_robot', **kwargs)
         gp = functools.partial(declare_get, self)
         self.scan_n = int(gp('fake_scan_beams', 360))
-        self.scan_far = gp('fake_scan_far_m', 3.0)         # background range when nothing is ahead
-        self.front_m = gp('fake_front_m', 3.0)             # obstacle dead-ahead (set <0.25 to test stop)
+        self.scan_far = gp('fake_scan_far_m', 3.0)         # no-map FALLBACK background range only
+        self.front_m = gp('fake_front_m', 0.0)             # >0: scripted obstacle dead-ahead at this
+                                                           # range (min with the map return; set <0.25
+                                                           # to test the safety stop). 0 = off.
         self.range_min = gp('scan_range_min_m', 0.12)
         self.range_max = gp('scan_range_max_m', 3.5)
         self.batt_start = gp('battery_sim_start_v', 12.5)
@@ -62,6 +74,25 @@ class FakeRobot(Node):
         self._tf = TransformBroadcaster(self)
         self._tf_static = StaticTransformBroadcaster(self)
         self._send_static_tf()
+
+        # The synthetic LDS-02: raycast the course map (free_thresh/negate from map.yaml so the
+        # classification can never diverge from what map_server/AMCL use). Fail-LOUD fallback to
+        # the legacy flat ring if the installed map is unavailable — the node still works for the
+        # topic-level tests, but AMCL cannot localize on a fictional ring, so say so.
+        self.map_info = geometry.map_info_from_params(gp)
+        self._grid = None
+        self._trig = None
+        try:
+            meta = load_map_yaml()
+            self._grid = occupancy.from_pgm(load_package_map(),
+                                            free_thresh=float(meta.get('free_thresh', 0.196)),
+                                            negate=int(meta.get('negate', 0)))
+            self._trig = occupancy.beam_trig(self.scan_n, -math.pi, 2.0 * math.pi / self.scan_n)
+        except Exception as exc:
+            self.get_logger().error(
+                f"course map unavailable ({exc!r}) -> falling back to the FLAT {self.scan_far} m "
+                "ring scan: AMCL cannot localize on it and the sim sensor delta is meaningless. "
+                "Build/install algae_dt so maps/map.pgm resolves for the map-true scan.")
 
         self.pub_scan = self.create_publisher(LaserScan, '/scan', qos_profile_sensor_data)
         self.pub_odom = self.create_publisher(Odometry, '/odom', 10)
@@ -143,9 +174,18 @@ class FakeRobot(Node):
         s.angle_max = s.angle_min + (self.scan_n - 1) * s.angle_increment   # consistent geometry for Nav2
         s.range_min = self.range_min
         s.range_max = self.range_max
-        s.ranges = [self.scan_far] * self.scan_n
-        for i in (self.scan_n // 2 - 1, self.scan_n // 2, self.scan_n // 2 + 1):
-            s.ranges[i] = self.front_m            # obstacle dead-ahead (clear by default)
+        if self._grid is not None:
+            # odom == map by construction (starts at the origin; both+fake auto-seeds AMCL there),
+            # so the integrated pose IS the map pose the beams march from.
+            ranges = occupancy.raycast_scan(self._grid, self.map_info, *self._pose,
+                                            trig=self._trig, range_min=self.range_min,
+                                            range_max=self.range_max)
+        else:
+            ranges = [self.scan_far] * self.scan_n          # no-map fallback (warned at startup)
+        if self.front_m > 0.0:
+            for i in (self.scan_n // 2 - 1, self.scan_n // 2, self.scan_n // 2 + 1):
+                ranges[i] = min(ranges[i], self.front_m)    # scripted obstacle dead-ahead
+        s.ranges = ranges
         self.pub_scan.publish(s)
 
     def _battery(self) -> None:

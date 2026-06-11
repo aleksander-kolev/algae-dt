@@ -19,6 +19,8 @@ from dataclasses import dataclass
 
 from algae_dt.lib import geometry
 
+INF = float('inf')
+
 
 @dataclass(frozen=True)
 class Grid:
@@ -86,6 +88,57 @@ def nearest_clear_cell(grid: Grid, col: int, row: int, clearance_px: float,
         if clear_radius_ok(grid, c, r, clearance_px):
             return (c, r)
     return None
+
+
+def beam_trig(n_beams: int, angle_min: float, angle_increment: float) -> tuple:
+    """Per-beam (cos a, sin a) for the beam-local angles — precompute ONCE (the angles never
+    change); raycast_scan then rotates them by the robot yaw with two multiplies per beam."""
+    return tuple((math.cos(angle_min + i * angle_increment),
+                  math.sin(angle_min + i * angle_increment)) for i in range(n_beams))
+
+
+def raycast_scan(grid: Grid, map_info: geometry.MapInfo, x: float, y: float, yaw: float, *,
+                 trig: tuple, range_min: float, range_max: float,
+                 step_factor: float = 1.0) -> list[float]:
+    """Synthetic LiDAR: march every beam from MAP pose (x, y, yaw) through the static grid and
+    return one range per beam — the distance to the first non-free cell.
+
+    Conventions (mirror the real LDS-02 + gz so consumers need no special cases):
+      * no hit within range_max / beam exits the map -> +inf ("no return", like the gz LiDAR),
+      * a hit CLOSER than range_min -> 0.0 (the LDS-02 blind-spot convention documented in
+        twin.yaml — anything inside 12 cm reads as "no return 0.0"),
+      * step = step_factor * map resolution (1.0 -> ±5 cm on the course map: well inside the
+        25 cm safety-gate margin AND the 0.20 m sensor tolerance, at half the CPU of finer
+        marches — this runs 360 beams at 5 Hz in pure Python and must never starve the node's
+        executor). The pixel transform is inlined (math.floor semantics identical to
+        geometry.world_to_pixel) — a function call per step would dominate the scan cost.
+
+    This is what makes the hardware-free twin honest: the fake robot SEES the actual arena, so
+    AMCL can localize on its scan, the real-vs-sim sensor delta is meaningful, and driving at a
+    wall genuinely trips the 25 cm gate. Used by fake_robot at its LDS-like 5 Hz."""
+    res = map_info.resolution
+    ox, oy, w, h1 = map_info.origin_x, map_info.origin_y, grid.width, grid.height - 1
+    step = max(1e-6, step_factor * res)
+    n_steps = int(range_max / step)
+    cy, sy = math.cos(yaw), math.sin(yaw)
+    inv_res = 1.0 / res
+    free, gw, gh = grid.free, grid.width, grid.height
+    out = []
+    for ca, sa in trig:
+        dx = cy * ca - sy * sa
+        dy = sy * ca + cy * sa
+        hit = INF
+        for k in range(1, n_steps + 1):
+            r = k * step
+            col = math.floor((x + r * dx - ox) * inv_res)
+            row = h1 - math.floor((y + r * dy - oy) * inv_res)
+            if col < 0 or row < 0 or col >= gw or row >= gh:
+                break                              # beam left the map: no return
+            if not free[row * gw + col]:
+                hit = 0.0 if r < range_min else r  # blind spot: too-close reads as "no return 0.0"
+                break
+        out.append(hit)
+    return out
 
 
 def reachable_goal(grid: Grid, map_info: geometry.MapInfo, x: float, y: float,

@@ -167,6 +167,16 @@ downloads — our nodes are exactly pub/sub built on this primitive), ROS 2 topi
   Estimate puts the error out of tolerance → the twin auto-snaps to the real start).
   TDD: `test_resync.py` (12) + `test_gzcli.py` (9) + `test_twin_resync.py` (6) + extended
   metrics/supervisor/GUI/mediator tests; end-to-end `docker/both_smoke.sh` (live resync round-trip).
+- [x] **T7.2** Hardware-free `both` actually demoable: `fake_robot`'s LiDAR **raycast from the
+  course map** (`lib/occupancy.raycast_scan` — AMCL localizes on it, the sensor delta is
+  meaningful, walls trip the gate; the old flat 3.0 m ring made SYNC red from t=0) and the launch
+  **auto-seeds AMCL at the origin in `both use_fake_robot`** (the fake robot deterministically
+  starts there == the sim spawn), eliminating the ~60 s costmap-activation race that aborted the
+  whole Nav2 bringup ("missions instantly complete"). CI gates now run `ROS_LOCALHOST_ONLY=1` —
+  a live demo container on the same docker bridge leaked its /dt/* topics into the suite (9
+  phantom failures). TDD: raycast suite in `test_occupancy.py` + the map-scan test in
+  `test_fake_robot.py`; gates: ci.sh 247 green, both_smoke (Nav2 "Managed nodes are active" in
+  both+fake now), sim_smoke unregressed.
 
 ---
 

@@ -326,6 +326,15 @@ ahead — set it under 0.25 m to test the safety stop), `/battery_state`, and th
 laser. Like the real robot, it **stops when commands stop arriving** (0.5 s timeout) instead of
 coasting forever.
 
+Its LiDAR is a real synthetic LDS-02: each beam is **raycast through the course map**
+(`lib/occupancy.raycast_scan`) from the robot's pose, so the fake robot *sees the actual arena* —
+AMCL can genuinely localize on its scan, the real-vs-sim sensor delta is meaningful, and driving
+at a wall trips the 25 cm gate for real. (The original flat 3.0 m ring made the hardware-free
+`both` demo incoherent: nothing to localize on, SYNC red from the first tick.) `fake_front_m > 0`
+still injects a scripted obstacle dead ahead for the safety-stop beat; in `both use_fake_robot`
+the launch also **auto-seeds AMCL at the origin** (where the fake robot deterministically starts,
+matching the sim spawn) so Nav2 activates without racing the operator's RViz click.
+
 ### 4.6 `dynamic_obstacle.py` — the "live environment change" prop
 
 **What it does, simply:** spawns a box into the running Gazebo world and sweeps it back and forth

@@ -54,7 +54,10 @@ reach ROS); (3) `both` `/sim/*` namespacing done (custom bridge + namespaced RSP
 ## What's next (implementation is done — these are lab/demo steps)
 1. **GPU host:** `bash docker/run.sh` → inside, `ros2 launch algae_dt bringup.launch.py mode:=sim_only`
    (display). Drive the GUI, place blooms, Start; record the baseline video per `docs/DEMO_SCRIPT.md`.
-   Hardware-free `both`: `mode:=both use_fake_robot:=true`.
+   Hardware-free `both`: `mode:=both use_fake_robot:=true` (AMCL auto-seeds at the origin there; the
+   fake robot's LiDAR is raycast from the course map, so AMCL/sync/safety all behave — no RViz
+   pose-estimate race). One-command GUI variants from Windows/WSL: `docker/open_sim.sh` /
+   `docker/open_both.sh`.
 2. **Lab:** connect to the Burger (SETUP §3), then `mode:=both` via `scripts/lab_run.sh` (or
    `mode:=real_only` via a manual `ros2 launch`) (`docs/RUN_ON_LAB_PC.md`). Validate the 25 cm stop on real `/scan`, AMCL
    2D-Pose-Estimate, one bloom navigate+spray, the `both` mirror.
