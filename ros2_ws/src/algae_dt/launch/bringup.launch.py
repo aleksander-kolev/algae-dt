@@ -20,6 +20,7 @@ gate before reaching /cmd_vel (+ /sim/cmd_vel mirror in `both`). sim_only flips 
 for headless AMCL auto-seed (D8: use_sim_time true ONLY in sim_only).
 """
 import os
+import tempfile
 
 import yaml
 from ament_index_python.packages import get_package_share_directory
@@ -29,7 +30,6 @@ from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription,
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from nav2_common.launch import RewrittenYaml
 
 from algae_dt.lib import nav2check
 
@@ -168,89 +168,46 @@ def launch_setup(context, *args, **kwargs):
     if use_fake_robot and mode in ('real_only', 'both'):
         actions.append(Node(package='algae_dt', executable='fake_robot', output='screen', parameters=[params]))
 
-    # Stock Nav2 (+AMCL+map) with our rewrites — runs in every mode (on the active/bare robot).
-    rewrites = {
-        'cmd_vel_out_topic': '/dt/cmd_vel_raw',     # Nav2's FINAL velocity -> our safety bus
-        'use_sim_time': use_sim_time_str,
-        # Plan within the HARDWARE (lab 2026-06 'doesn't follow the RViz path'): stock burger.yaml
-        # lets DWB plan 0.3 m/s but the Burger wheel ceiling is ~0.22 — real wheels saturated vx
-        # while wz tracked, bending every fast arc tighter than the plan (weave/wall-hug); the
-        # ideal-motor sim never saturates, which is why home runs looked fine. Cap the PLAN at the
-        # hardware so plan == achievable everywhere; the mediator's curvature-preserving clamp
-        # (lib.safety.limit_command) stays the independent safety authority.
-        'max_vel_x': '0.22',
-        'max_speed_xy': '0.22',
-        # Virtual obstacles reach REAL navigation (user gap, lab 2026-06): every Nav2 OBSTACLE
-        # source — the 4 costmap scan layers + collision_monitor's source, which are the ONLY
-        # plain `topic` keys in burger.yaml (verified) — reads the mediator's /dt/scan_nav: the
-        # real scan, with the TRUSTED mirror's returns overlaid in `both` (verbatim pass-through
-        # in sim_only/real_only). AMCL's `scan_topic` is a DIFFERENT key and stays on the bare
-        # /scan: localization must never see virtual returns.
-        'topic': '/dt/scan_nav',
-    }
-    if mode == 'sim_only':
-        # Headless auto-seed at the spawn (no human 2D pose). EXPLICIT CONTRACT: AMCL's default
-        # initial_pose is (0,0,0) and the robot spawns at (_SPAWN_X,_SPAWN_Y,yaw 0) — these
-        # coincide BY DESIGN. Changing the spawn pose requires also rewriting amcl's
-        # initial_pose.{x,y,yaw} here, or sim_only mis-localizes from t=0.
-        rewrites['set_initial_pose'] = 'True'
-        # The GPU-less / WSL software render gives ~2.5-3.5 Hz LiDAR; the stock collision_monitor
-        # scan source_timeout (0.2 s) then rejects every scan ("invalid source") and halts autonomy.
-        # Loosen it to 2.0 s for SIM ONLY so the demo navigates; real_only/both keep the stock 0.2 s.
-        rewrites['source_timeout'] = '2.0'
-        # Same throttle makes the controller sluggish, so the default progress checker (move 0.5 m
-        # within 10 s) aborts ("Failed to make progress") before the robot settles into the goal ->
-        # blooms skipped, never sprayed. Loosen it for SIM ONLY (real_only/both keep stock); our own
-        # nav_goal_timeout_s still bounds a truly stuck goal.
-        rewrites['movement_time_allowance'] = '30.0'
-        rewrites['required_movement_radius'] = '0.1'
-    elif mode == 'both' and use_fake_robot:
-        # Hardware-free `both` (the home/dev rig): the fake robot deterministically starts at the
-        # map origin == the sim spawn (the same coupling contract as sim_only's auto-seed), so
-        # seed AMCL there instead of racing the operator's RViz click against Nav2's ~60 s
-        # costmap-activation fuse. Losing that race aborted the whole Nav2 bringup ("Failed to
-        # bring up all requested nodes") -> every mission goal failed instantly while the launch
-        # looked alive. The real lab `both` (no fake robot) keeps the operator 2D-Pose-Estimate
-        # flow. source_timeout matches sim_only: the home rig is the same throttled environment.
-        rewrites['set_initial_pose'] = 'True'
-        rewrites['source_timeout'] = '2.0'
-        # TF freshness margin for the throttled home rig: AMCL re-stamps map->odom per processed
-        # scan, so any scan-delivery hiccup under load let the transform go stale past the stock
-        # 0.2-0.3 s tolerances and Nav2's controller aborted mid-goal with "Transform data too old
-        # ... odom to map" -> bloom skipped in seconds (looked like an instant fake completion).
-        # The fake robot's odom is exact (kinematic), so a longer-lived map->odom costs nothing.
-        rewrites['transform_tolerance'] = '2.0'
-    else:
-        # REAL robot (real_only / lab `both`): the stock per-source collision_monitor
-        # source_timeout (0.2 s) EQUALS the LDS-02 scan period, so any Wi-Fi delivery jitter past
-        # 200 ms declared the scan source invalid and the monitor halted autonomy in bursts —
-        # part of the lab stutter. Align it with the documented 1.0 s real-scan staleness budget
-        # (twin.yaml max_data_age_s); the mediator's 25 cm gate keeps its own tight net.
-        rewrites['source_timeout'] = '1.0'
-
-    # FAIL-LOUD PREFLIGHT (lib/nav2check): RewrittenYaml only rewrites keys that EXIST — a key
-    # missing from the (lab: source-built, unpinned) burger.yaml is a SILENT no-op. The worst
-    # case is the cmd_vel_out_topic rewrite: without it Nav2 publishes /cmd_vel DIRECTLY and the
-    # real robot drives UNGATED. Never start a REAL mode on a compromised params file; sim_only
-    # only warns (no robot at risk). scripts/lab_run.sh runs the same check even earlier.
+    # Stock Nav2 (+AMCL+map) in every mode — with our overrides CHECKED AND REPAIRED IN, not
+    # RewrittenYaml'd. RewrittenYaml only replaces keys that EXIST (a missing key is a SILENT
+    # no-op) and the lab's turtlebot3_navigation2 is source-built at an unpinned version — its
+    # burger.yaml has e.g. NO use_sim_time key anywhere (observed live, lab 2026-06-11), which a
+    # rewrite-only flow can neither apply nor even notice. lib/nav2check.repair_nav2_params()
+    # replaces-or-ADDS every override with path-aware placement; the per-mode override set and
+    # its full rationale live in nav2check.rewrites_for_mode() — the SAME source of truth the
+    # lab_run.sh preflight checks, so the CLI gate and the launch can never disagree. The
+    # patched params are dumped to a temp file and Nav2 launches on THAT. Only a file with no
+    # safe place for the chokepoint (no collision_monitor / no amcl section) still refuses a
+    # REAL mode: an ungated robot is the one thing this launch must never produce. (sim_only's
+    # auto-seed relies on the _SPAWN==AMCL-origin contract documented at _SPAWN_X above.)
+    rewrites = nav2check.rewrites_for_mode(mode, fake_robot=use_fake_robot)
     burger_yaml = _src('turtlebot3_navigation2', 'param', 'burger.yaml')
     with open(burger_yaml, 'r', encoding='utf-8') as f:
-        problems = nav2check.check_nav2_params(yaml.safe_load(f), rewrite_keys=tuple(rewrites))
+        burger_doc = yaml.safe_load(f)
+    patched, applied, unfixable = nav2check.repair_nav2_params(burger_doc, rewrites)
+    for k in unfixable:
+        print(f"[bringup.launch] WARNING: no place for `{k}` in {burger_yaml} — "
+              f"{nav2check.consequence(k)}.", flush=True)
+    problems = nav2check.check_nav2_params(patched)
     if problems:
         text = ''.join(f"\n  - {p}" for p in problems)
         if mode in ('real_only', 'both'):
             raise RuntimeError(
                 f"[bringup.launch] UNSAFE Nav2 params at {burger_yaml}:{text}\n"
                 "Refusing to start a REAL mode (Nav2 would bypass the 25 cm safety gate). "
-                "Update/rebuild turtlebot3_navigation2 (jazzy branch) or repair the file.")
+                "Update/rebuild turtlebot3_navigation2 (jazzy branch), then relaunch.")
         print(f"[bringup.launch] WARNING: Nav2 params issues at {burger_yaml}:{text}", flush=True)
-
-    nav2_params = RewrittenYaml(source_file=burger_yaml,
-                                param_rewrites=rewrites, convert_types=True)
+    fd, nav2_params_path = tempfile.mkstemp(prefix='algae_dt_nav2_', suffix='.yaml')
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+        yaml.safe_dump(patched, f, sort_keys=False)
+    print(f"[bringup.launch] Nav2 params: {burger_yaml} -> {len(applied)} repair(s) -> "
+          f"{nav2_params_path}", flush=True)
+    for line in applied:
+        print(f"[bringup.launch]   repaired: {line}", flush=True)
     actions.append(IncludeLaunchDescription(
         PythonLaunchDescriptionSource(_src('nav2_bringup', 'launch', 'bringup_launch.py')),
         launch_arguments={'use_sim_time': use_sim_time_str, 'map': map_yaml,
-                          'params_file': nav2_params, 'autostart': 'true'}.items()))
+                          'params_file': nav2_params_path, 'autostart': 'true'}.items()))
 
     # ---- our DT layer (all modes); params bind via the /** wildcard in twin.yaml ----
     common = [params, {'use_sim_time': use_sim_time, 'mode': mode}]

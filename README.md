@@ -254,9 +254,11 @@ the full launch console (`console.log`), a replayable `ros2 bag` of `/dt/*` + Na
 commands + both scans + TF + `/rosout` (`bag/` — inspect with `ros2 bag info`, replay with
 `ros2 bag play`), the per-node ROS logs (`ros/`), and the sync supervisor's `sync_metrics_*.csv`.
 Copy that folder to USB/OneDrive **before leaving** — the laptop can be wiped. If the script exits
-with **code 6**, the preflight found this machine's `turtlebot3_navigation2` params file cannot
-host the safety chokepoint (Nav2 would drive the robot UNGATED): update `~/turtlebot3_ws/src`
-(turtlebot3, jazzy branch) and rebuild, or demo with `--sim`.
+with **code 6**, even after auto-repair this machine's `turtlebot3_navigation2` params file cannot
+host the safety chokepoint (Nav2 would drive the robot UNGATED — only a file with no
+`collision_monitor` section at all trips this): update `~/turtlebot3_ws/src` (turtlebot3, jazzy
+branch) and rebuild, or demo with `--sim`. Ordinary key differences are repaired automatically and
+each applied repair is printed at launch.
 
 ### If the script doesn't work — fully manual
 
@@ -383,11 +385,14 @@ measured sync error all move together, and the executed correction is published 
 
 Note for Jazzy: `/cmd_vel` is `geometry_msgs/TwistStamped` (both the real bringup and Gazebo expect
 it stamped), so the whole bus is `TwistStamped`. The launch reroutes Nav2's *final* velocity (the
-collision monitor's `cmd_vel_out_topic`) onto `/dt/cmd_vel_raw`, caps Nav2's planned speed at the
-Burger's real 0.22 m/s ceiling (the stock file plans 0.3 — saturated wheels executed every fast arc
-tighter than the RViz plan), and **preflight-verifies** (`lib/nav2check.py`) that the stock params
-file actually carries every rewritten key — a missing key is a silent no-op that would leave Nav2
-driving the robot ungated, so a real mode refuses to launch on a compromised file.
+collision monitor's `cmd_vel_out_topic`) onto `/dt/cmd_vel_raw` and caps Nav2's planned speed at
+the Burger's real 0.22 m/s ceiling (the stock file plans 0.3 — saturated wheels executed every
+fast arc tighter than the RViz plan). These overrides are **checked and repaired in**
+(`lib/nav2check.py`): the stock params file is loaded, every needed key is replaced *or added*
+with path-aware placement (a lab machine's file shipping without `use_sim_time` keys is
+auto-fixed, the TwistStamped chain is enforced), and Nav2 launches on the patched copy. A real
+mode refuses to start only if the file genuinely cannot host the safety chokepoint (no
+`collision_monitor` section) — anything less is a named warning, never a blocked demo.
 
 ---
 

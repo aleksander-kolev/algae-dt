@@ -184,7 +184,13 @@ that wants to drive (Nav2, the keyboard teleop, the mission's spray spin) publis
 shared bus, `/dt/cmd_vel_raw`. Twenty times per second the mediator takes the latest bus command,
 asks "is it safe?", clips it to the robot's physical limits, and forwards the result to the real
 robot (`/cmd_vel`) — and in `both` mode the identical command to the sim (`/sim/cmd_vel`). That's
-the "fan-in" (many sources, one bus) and "fan-out" (one decision, both worlds).
+the "fan-in" (many sources, one bus) and "fan-out" (one decision, both worlds). Two fidelity
+details hide in that forwarding: the limit clip preserves **curvature** (over-limit commands are
+scaled as a pair, never component-by-component, so the robot drives a slower version of the *same*
+arc instead of a tighter one), and the sim copy is scaled by the measured **real-time factor**
+(Gazebo integrates commands in sim time, so when the sim runs at half speed the mirror would cover
+half the ground per wall-clock second — the mediator multiplies the sim command by 1/RTF, clamped,
+so the twin keeps pace with the real robot in wall time).
 
 **The 25 cm dual-LiDAR safety gate.** Each cycle it looks at the latest laser scan from each
 world and finds the nearest valid reading in a ±20° cone dead ahead (`lib/safety.py`). If
@@ -195,7 +201,25 @@ world and finds the nearest valid reading in a ±20° cone dead ahead (`lib/safe
 - a world that never produced data (e.g. there is no real robot in `sim_only`) is simply ignored —
   otherwise the absent world would permanently block everything;
 - the mirror sim gets a slightly looser staleness budget (2 s vs 1 s) because a slow computer
-  renders the simulated LiDAR at only ~3 Hz, and one late sim frame must not brake the real robot.
+  renders the simulated LiDAR at only ~3 Hz, and one late sim frame must not brake the real robot;
+- the block is **sticky** (`lib/safety.BlockLatch`): once tripped, forward stays cut until the
+  front cone reads beyond 0.35 m for 0.3 s *continuously*. Without this, a robot mid-navigation
+  would rotate (rotation is allowed!), swing the obstacle out of the ±20° cone for an instant,
+  un-block, lurch forward, re-block — and creep right past the box. Observed on the real robot;
+  the latch turns the flicker into an honest stop while rotation and reverse keep working.
+
+**Virtual obstacles are real to the planner (`/dt/scan_nav`).** The gate is a last-resort reflex;
+planning is where a digital twin should shine. The mediator publishes `/dt/scan_nav` — the real
+laser scan with the mirror's returns merged in (`lib/scanmerge.py`, matched **by angle** because
+the real LDS-02 and the Gazebo lidar index their beams differently) — and the launch points Nav2's
+obstacle sources (the costmap layers and the collision monitor) at it instead of the raw `/scan`.
+Drop a box in the Gazebo world and the *real* robot's costmap marks it; Nav2 plans around a thing
+that only exists virtually. Three guards keep this honest: the overlay only happens while the twin
+is **in sync** (a diverged mirror measures the wrong place), only after AMCL is **localized** (before
+the operator's 2D Pose Estimate the mirror stands at the origin while the real robot stands anywhere
+— its returns would paint phantom walls into the costmap), and AMCL itself always keeps the pure
+real `/scan` (localization must never see virtual returns). Out of `both` mode it is a verbatim
+pass-through.
 
 **The E-STOP.** The mediator owns the emergency stop. It is **latched**: once tripped (by the
 operator's button or automatically by a critically low battery) it forces full stop and *stays*
@@ -404,6 +428,8 @@ any machine with plain `pytest`. The nodes are thin shells around them.
 | `trajectory.py` | The obstacle's sine sweep + the keep-out clamp (distance from a point to the swept segment). |
 | `resync.py` | The drift-correction policy: WHEN may the twin snap the sim onto the real pose (manual = now, auto = sustained breach only, cooldown between attempts, stale/NaN data refuses). Immutable state, pure function. |
 | `gzcli.py` | The `gz service` CLI plumbing shared by `dynamic_obstacle` and `twin_resync`: request text composition (validated names, finite coordinates) + Boolean-reply parsing, with an injectable runner so tests never need a sim. |
+| `scanmerge.py` | Overlays the trusted mirror's laser returns onto the real scan **by angle** (the LDS-02 starts at 0 rad, the Gazebo lidar at −π — index-copy would paint obstacles in the wrong direction). Conservative: a virtual return can only shorten a beam, never erase a real one; invalid beams on either side never poison the other. |
+| `nav2check.py` | Checks **and repairs** the stock Nav2 params: every launch override is replaced or *added* with path-aware placement (speed caps under FollowPath, `topic` on each observation source, the chokepoint reroute, the TwistStamped chain enforced, `use_sim_time` on every node), and the patched dict is what Nav2 actually launches on. One per-mode override list (`rewrites_for_mode`) is shared by the launch and the `lab_run.sh` gate. A real mode refuses only when no `collision_monitor`/`amcl` section exists to host the chokepoint (exit 6). |
 | `ros_utils.py` | The only ROS-adjacent helper module: the declare-and-get parameter idiom and the installed-map loaders (used by several nodes; previously copy-pasted). |
 
 ---
@@ -415,8 +441,11 @@ means "apply to every node"). Nothing is hardcoded in the nodes; every value in 
 a comment saying where it comes from and why that magnitude. Highlights:
 
 - **Safety:** `stop_distance_m: 0.25` (the course spec), `front_sector_rad: 0.70` (the ±20° cone),
-  the LDS-02 LiDAR's valid range (0.12–3.5 m), the Burger's real speed limits, staleness budgets
+  the sticky-release hysteresis (`stop_release_m: 0.35`, `stop_release_hold_s: 0.3`), the LDS-02
+  LiDAR's valid range (0.12–3.5 m), the Burger's real speed limits, staleness budgets
   (1 s real / 2 s sim).
+- **Mirror fidelity:** `rtf_comp_enable/rtf_comp_max/rtf_window_s` — the 1/RTF scaling of the sim
+  fan-out (a no-op at full speed; what keeps the twin on the real robot's path on a slow sim).
 - **Sync tolerances (the graded thresholds):** 15 cm position, ~15° heading, 20 cm sensor
   disagreement, 250 ms latency budget, 300 ms stop-skew budget — each with a rationale comment.
 - **Spray:** 3.0 revolutions at 2.8 rad/s (fast enough to *look* like spinning even on a slow
@@ -446,14 +475,24 @@ One file brings up everything, in three flavours (`mode:=sim_only|real_only|both
      `/robot_description` and `/joint_states` all remapped) so nothing collides with the real
      robot's bare topics.
    - `real_only`: starts no simulator at all (the real robot's own computer runs its bring-up).
-3. **Nav2** in every mode, with our three surgical setting rewrites:
+3. **Nav2** in every mode, with our settings **checked and repaired in** (`lib/nav2check.py`):
+   the stock params file is loaded, every override below is replaced *or added* with path-aware
+   placement, and Nav2 launches on the patched copy (a lab file with missing keys — e.g. no
+   `use_sim_time` anywhere, seen 2026-06-11 — is auto-fixed; only a file with no
+   `collision_monitor` section to host the safety chokepoint still refuses a real mode):
    - reroute Nav2's final output velocity onto our command bus (`/dt/cmd_vel_raw`) — this is what
      puts the safety gate between Nav2 and the motors;
+   - cap the planner's speed at the Burger's real 0.22 m/s ceiling (the stock file plans 0.3;
+     saturated wheels executed every fast arc tighter than the plan on the real robot);
+   - point every obstacle source (costmap layers + collision monitor) at `/dt/scan_nav` so
+     virtual obstacles shape real planning — AMCL keeps the raw `/scan`;
    - in `sim_only`, auto-seed AMCL at the spawn (no human click needed) and loosen two timing
      checks that a slow software-rendered LiDAR would otherwise trip;
    - in `both use_fake_robot` (the hardware-free home rig), auto-seed AMCL at the origin too
-     (the fake robot deterministically starts there) and widen the TF/scan timing budgets —
-     the real lab `both` keeps the stock values and the operator's 2D Pose Estimate.
+     (the fake robot deterministically starts there) and widen the TF/scan timing budgets;
+   - on the real robot, give the collision monitor's scan source the documented 1.0 s staleness
+     budget (the stock 0.2 s equals the LDS-02's own period — Wi-Fi jitter kept "expiring" the
+     scan and stuttering autonomy).
 4. **Our four always-on nodes** (+ `twin_resync` in `both`, + `fake_robot` / `dynamic_obstacle`
    when their flags are set).
 5. **RViz** — automatically in `real_only`/`both` (the operator *must* click 2D Pose Estimate
@@ -535,6 +574,8 @@ fabricated message timestamps in a way no real system ever would, hiding the clo
 | situation | behaviour | why |
 |---|---|---|
 | obstacle < 25 cm ahead, either world | forward zeroed on BOTH robots; turn/reverse still allowed | either world is evidence; escape must stay possible |
+| the block engaged | it LATCHES: release only after the cone reads > 0.35 m for 0.3 s sustained | allowed rotation used to flicker the obstacle out of the cone and creep past it |
+| an obstacle exists only in the sim | it is marked in the REAL robot's costmaps (`/dt/scan_nav`) — but only while in-sync AND localized, and never into AMCL | planning should respect the twin; a diverged or pre-localization mirror would paint phantom walls |
 | the mirror sim is OUT OF SYNC (`both`) | the mirror's scan stops gating the real robot until it re-syncs | a diverged mirror measures the wrong place — its veto phantom-braked real navigation (the real robot's own LiDAR always gates) |
 | a laser stream goes stale | treated as blocked | a dead sensor must stop the robot, not blind it |
 | a world never had data (absent) | ignored by the gate | an absent world isn't a hazard; it must not freeze the present one |

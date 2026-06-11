@@ -254,10 +254,17 @@ PAYLOAD='
       /sim/cmd_vel /sim/scan /sim/odom /sim/ground_truth /clock \
       >"$LOG_DIR/bag_record.log" 2>&1 &
     DT_BAG_PID=$!
-    trap "echo; echo \"== lab evidence saved in: $LOG_DIR — copy it off the machine ==\"; kill $DT_BAG_PID 2>/dev/null" EXIT
+    # The trap WAITS for the recorder: in the docker runtime this bash is the container PID 1 —
+    # exiting right after the kill tears the namespace down and SIGKILLs rosbag2 before it
+    # finalizes the mcap + metadata.yaml (a truncated, unreadable evidence bag, every run).
+    trap "echo; echo \"== lab evidence saved in: $LOG_DIR — copy it off the machine ==\"; kill $DT_BAG_PID 2>/dev/null; wait $DT_BAG_PID 2>/dev/null || true" EXIT
     DT_LAUNCH_ARGS="$DT_LAUNCH_ARGS log_dir:=$LOG_DIR"
     echo "-- ros2 launch algae_dt bringup.launch.py mode:=$DT_MODE $DT_LAUNCH_ARGS --"
     ros2 launch algae_dt bringup.launch.py mode:="$DT_MODE" $DT_LAUNCH_ARGS 2>&1 | tee "$LOG_DIR/console.log"
+    # Propagate the LAUNCH status, not the tee status: the pipeline as a whole reports tee (0),
+    # which would turn every launch failure (incl. the real-mode nav2check refusal) into a green
+    # exit. NOTE this whole payload is a single-quoted string — no apostrophes anywhere in it.
+    exit "${PIPESTATUS[0]}"
   else
     echo "-- ros2 launch algae_dt bringup.launch.py mode:=$DT_MODE $DT_LAUNCH_ARGS (--no-log) --"
     exec ros2 launch algae_dt bringup.launch.py mode:="$DT_MODE" $DT_LAUNCH_ARGS

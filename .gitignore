@@ -20,6 +20,7 @@ __pycache__/
 *.log
 sync_metrics_*.csv
 .ros/
+lab_logs/
 
 # Secrets / large media
 CREDENTIALS.txt

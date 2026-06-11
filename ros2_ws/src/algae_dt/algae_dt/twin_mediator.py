@@ -240,10 +240,14 @@ class TwinMediator(Node):
         in the twin doesn't reflect on the robot's nav'). In `both` with a TRUSTED, fresh mirror,
         overlay the mirror's returns onto the real scan by angle (lib.scanmerge) so a virtual
         obstacle enters the REAL costmaps and Nav2 plans around it — the same trust rule as the
-        gate (sync_ok), so a diverged mirror can no more poison the costmap than veto motion.
-        AMCL keeps the bare /scan (its `scan_topic` key is untouched by the launch rewrite):
-        localization must never see virtual returns. Everywhere else: verbatim pass-through."""
-        if not (self._both and self._sync_ok and self._sim_scan is not None
+        gate (sync_ok), so a diverged mirror can no more poison the costmap than veto motion —
+        PLUS /dt/localized: pre-2D-Pose-Estimate the mirror stands at the origin while the real
+        robot stands anywhere (and sync_ok defaults True), so origin-viewpoint returns would be
+        MARKED into the real costmaps as phantom walls that persist until ray-traced clear; the
+        same pre-AMCL reasoning twin_resync fires behind. AMCL keeps the bare /scan (its
+        `scan_topic` key is untouched by the launch rewrite): localization must never see
+        virtual returns. Everywhere else: verbatim pass-through."""
+        if not (self._both and self._sync_ok and self._localized and self._sim_scan is not None
                 and (self._now() - self._sim_scan_t) <= self.sim_max_data_age_s):
             return msg
         sim = self._sim_scan
