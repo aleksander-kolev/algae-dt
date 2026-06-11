@@ -21,6 +21,7 @@ for headless AMCL auto-seed (D8: use_sim_time true ONLY in sim_only).
 """
 import os
 
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription,
@@ -29,6 +30,8 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from nav2_common.launch import RewrittenYaml
+
+from algae_dt.lib import nav2check
 
 
 def _src(pkg: str, *parts: str) -> str:
@@ -169,6 +172,21 @@ def launch_setup(context, *args, **kwargs):
     rewrites = {
         'cmd_vel_out_topic': '/dt/cmd_vel_raw',     # Nav2's FINAL velocity -> our safety bus
         'use_sim_time': use_sim_time_str,
+        # Plan within the HARDWARE (lab 2026-06 'doesn't follow the RViz path'): stock burger.yaml
+        # lets DWB plan 0.3 m/s but the Burger wheel ceiling is ~0.22 — real wheels saturated vx
+        # while wz tracked, bending every fast arc tighter than the plan (weave/wall-hug); the
+        # ideal-motor sim never saturates, which is why home runs looked fine. Cap the PLAN at the
+        # hardware so plan == achievable everywhere; the mediator's curvature-preserving clamp
+        # (lib.safety.limit_command) stays the independent safety authority.
+        'max_vel_x': '0.22',
+        'max_speed_xy': '0.22',
+        # Virtual obstacles reach REAL navigation (user gap, lab 2026-06): every Nav2 OBSTACLE
+        # source — the 4 costmap scan layers + collision_monitor's source, which are the ONLY
+        # plain `topic` keys in burger.yaml (verified) — reads the mediator's /dt/scan_nav: the
+        # real scan, with the TRUSTED mirror's returns overlaid in `both` (verbatim pass-through
+        # in sim_only/real_only). AMCL's `scan_topic` is a DIFFERENT key and stays on the bare
+        # /scan: localization must never see virtual returns.
+        'topic': '/dt/scan_nav',
     }
     if mode == 'sim_only':
         # Headless auto-seed at the spawn (no human 2D pose). EXPLICIT CONTRACT: AMCL's default
@@ -202,9 +220,33 @@ def launch_setup(context, *args, **kwargs):
         # ... odom to map" -> bloom skipped in seconds (looked like an instant fake completion).
         # The fake robot's odom is exact (kinematic), so a longer-lived map->odom costs nothing.
         rewrites['transform_tolerance'] = '2.0'
-    nav2_params = RewrittenYaml(
-        source_file=_src('turtlebot3_navigation2', 'param', 'burger.yaml'),
-        param_rewrites=rewrites, convert_types=True)
+    else:
+        # REAL robot (real_only / lab `both`): the stock per-source collision_monitor
+        # source_timeout (0.2 s) EQUALS the LDS-02 scan period, so any Wi-Fi delivery jitter past
+        # 200 ms declared the scan source invalid and the monitor halted autonomy in bursts —
+        # part of the lab stutter. Align it with the documented 1.0 s real-scan staleness budget
+        # (twin.yaml max_data_age_s); the mediator's 25 cm gate keeps its own tight net.
+        rewrites['source_timeout'] = '1.0'
+
+    # FAIL-LOUD PREFLIGHT (lib/nav2check): RewrittenYaml only rewrites keys that EXIST — a key
+    # missing from the (lab: source-built, unpinned) burger.yaml is a SILENT no-op. The worst
+    # case is the cmd_vel_out_topic rewrite: without it Nav2 publishes /cmd_vel DIRECTLY and the
+    # real robot drives UNGATED. Never start a REAL mode on a compromised params file; sim_only
+    # only warns (no robot at risk). scripts/lab_run.sh runs the same check even earlier.
+    burger_yaml = _src('turtlebot3_navigation2', 'param', 'burger.yaml')
+    with open(burger_yaml, 'r', encoding='utf-8') as f:
+        problems = nav2check.check_nav2_params(yaml.safe_load(f), rewrite_keys=tuple(rewrites))
+    if problems:
+        text = ''.join(f"\n  - {p}" for p in problems)
+        if mode in ('real_only', 'both'):
+            raise RuntimeError(
+                f"[bringup.launch] UNSAFE Nav2 params at {burger_yaml}:{text}\n"
+                "Refusing to start a REAL mode (Nav2 would bypass the 25 cm safety gate). "
+                "Update/rebuild turtlebot3_navigation2 (jazzy branch) or repair the file.")
+        print(f"[bringup.launch] WARNING: Nav2 params issues at {burger_yaml}:{text}", flush=True)
+
+    nav2_params = RewrittenYaml(source_file=burger_yaml,
+                                param_rewrites=rewrites, convert_types=True)
     actions.append(IncludeLaunchDescription(
         PythonLaunchDescriptionSource(_src('nav2_bringup', 'launch', 'bringup_launch.py')),
         launch_arguments={'use_sim_time': use_sim_time_str, 'map': map_yaml,
@@ -212,9 +254,13 @@ def launch_setup(context, *args, **kwargs):
 
     # ---- our DT layer (all modes); params bind via the /** wildcard in twin.yaml ----
     common = [params, {'use_sim_time': use_sim_time, 'mode': mode}]
+    # log_dir:= (set by scripts/lab_run.sh) points the supervisor's Rubric-② evidence CSV at the
+    # session's lab_logs/<stamp>/ folder instead of the launch CWD.
+    log_dir = LaunchConfiguration('log_dir').perform(context).strip()
+    sup_params = common + ([{'sync_log_dir': log_dir}] if log_dir else [])
     actions += [
         Node(package='algae_dt', executable='twin_mediator', output='screen', parameters=common),
-        Node(package='algae_dt', executable='sync_supervisor', output='screen', parameters=common),
+        Node(package='algae_dt', executable='sync_supervisor', output='screen', parameters=sup_params),
         # NEVER set name= on mission_runner (process-wide remap trap, BEST_APPROACHES).
         Node(package='algae_dt', executable='mission_runner', output='screen', parameters=common),
     ]
@@ -246,5 +292,8 @@ def generate_launch_description() -> LaunchDescription:
                                           'GPU sensors, no 3D window; a client crash never kills the launch)'),
         DeclareLaunchArgument('use_dynamic_obstacle', default_value='false',
                               description='sim_only/both: sweep the moving obstacle box (pillar-III live change)'),
+        DeclareLaunchArgument('log_dir', default_value='',
+                              description='evidence directory: the sync CSV lands here when set '
+                                          '(scripts/lab_run.sh points it at lab_logs/<stamp>/)'),
         OpaqueFunction(function=launch_setup),
     ])

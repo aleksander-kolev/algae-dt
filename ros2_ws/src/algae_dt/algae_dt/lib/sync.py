@@ -51,6 +51,37 @@ def within_tolerance(err: SyncError, tol_pose_xy: float,
             and err.sensor <= tol_sensor_range)
 
 
+def rtf_estimate(samples, min_span_s: float = 0.5) -> float | None:
+    """Real-time factor d(sim)/d(wall) over an ordered (wall_s, sim_s) sample window.
+
+    Returns None until the wall span reaches `min_span_s`, or while the sim makes no forward
+    progress (paused / just started) — callers fall back to a factor of 1.0 instead of dividing
+    by zero or trusting a one-sample guess.
+    """
+    samples = list(samples)
+    if len(samples) < 2:
+        return None
+    (w0, s0), (w1, s1) = samples[0], samples[-1]
+    dw, ds = w1 - w0, s1 - s0
+    if dw < min_span_s or ds <= 0.0:
+        return None
+    return ds / dw
+
+
+def rtf_compensation(rtf: float | None, max_factor: float) -> float:
+    """Velocity scale for the `both` mirror fan-out: clamp(1/RTF) into [1/max_factor, max_factor].
+
+    Gazebo integrates /sim/cmd_vel in SIM time, so at RTF<1 the open-loop mirror under-travels per
+    WALL second and turns in the wrong places ('the twin doesn't take the path the real one
+    takes', lab 2026-06). Scaling the sim fan-out by 1/RTF makes the mirror cover the real
+    robot's ground per wall second; the clamp keeps a paused/hiccuping sim from exploding the
+    factor, and an unknown/degenerate RTF (None, <=0) is never guessed: factor 1.0.
+    """
+    if rtf is None or rtf <= 0.0 or max_factor <= 0.0:
+        return 1.0
+    return max(1.0 / max_factor, min(max_factor, 1.0 / rtf))
+
+
 def integrate_unicycle(x: float, y: float, yaw: float,
                        v: float, omega: float, dt: float) -> tuple[float, float, float]:
     """Exact constant-(v, omega) unicycle step over dt; yaw normalized to [-pi, pi).

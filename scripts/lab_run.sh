@@ -23,6 +23,9 @@
 #   ./scripts/lab_run.sh --native    # force the no-Docker path  (--docker forces the container)
 #   ./scripts/lab_run.sh --rebuild   # clean colcon build of algae_dt first (docker: full ws clean)
 #   ./scripts/lab_run.sh --no-gz-gui # skip the gz 3D client (weak GL stack; RViz+console still show all)
+#   ./scripts/lab_run.sh --no-log    # disable evidence recording (DEFAULT ON: every run records a
+#                                    # ros2 bag of /dt/*+Nav2+scans+/rosout, the launch console, the
+#                                    # per-node ROS logs and the sync CSV under ~/turtlebot3_ws/lab_logs/)
 #   TB3_IMAGE=name / ROS_DOMAIN_ID=n / ROBOT_IP=ip   # overrides if image/robot differ
 #   LAB_RUN_DRY=1                    # test hook: do everything except the final launch, then exit 0
 #
@@ -44,13 +47,15 @@ REBUILD=false
 MODE="both"        # default: the lab runner brings up the FULL real+sim demo
 GZ_GUI=true
 RUNTIME=""         # "" = auto-detect | docker | native
+NO_LOG=""          # "" = record lab evidence (bag + console + ROS logs + sync CSV); --no-log disables
 for a in "$@"; do case "$a" in
   --rebuild) REBUILD=true ;;
   --sim|--fallback) MODE="sim_only" ;;
   --no-gz-gui) GZ_GUI=false ;;
+  --no-log) NO_LOG=1 ;;
   --docker) RUNTIME=docker ;;
   --native) RUNTIME=native ;;
-  *) die "unknown arg: $a   (--sim hardware-free fallback | --native/--docker force the runtime | --rebuild clean build | --no-gz-gui skip the gz 3D client)" ;;
+  *) die "unknown arg: $a   (--sim hardware-free fallback | --native/--docker force the runtime | --rebuild clean build | --no-gz-gui skip the gz 3D client | --no-log disable evidence recording)" ;;
 esac; done
 
 # Launch args per mode. both/real_only: use_rviz auto-resolves to true (AMCL seeding needs it).
@@ -222,11 +227,41 @@ PAYLOAD='
   echo "-- colcon build --packages-select algae_dt --"
   colcon build --packages-select algae_dt
   source install/setup.bash
+  echo "-- Nav2 safety-chokepoint preflight (lib/nav2check: the RewrittenYaml keys must EXIST) --"
+  BURGER_YAML="$(ros2 pkg prefix turtlebot3_navigation2)/share/turtlebot3_navigation2/param/burger.yaml"
+  python3 -m algae_dt.lib.nav2check --mode "$DT_MODE" "$BURGER_YAML" || {
+    echo "FATAL: this turtlebot3_navigation2 params file cannot host the safety chokepoint —"
+    echo "       Nav2 would drive the REAL robot UNGATED (see problems above). Update"
+    echo "       ~/turtlebot3_ws/src (turtlebot3, jazzy branch) and rebuild, or demo with --sim."; exit 6; }
   if [ -n "${LAB_RUN_DRY:-}" ]; then
     echo "DRY-RUN OK: would exec: ros2 launch algae_dt bringup.launch.py mode:=$DT_MODE $DT_LAUNCH_ARGS"; exit 0
   fi
-  echo "-- ros2 launch algae_dt bringup.launch.py mode:=$DT_MODE $DT_LAUNCH_ARGS --"
-  exec ros2 launch algae_dt bringup.launch.py mode:="$DT_MODE" $DT_LAUNCH_ARGS
+  if [ -z "${DT_NO_LOG:-}" ]; then
+    LOG_DIR="$DT_WS/lab_logs/$(date -u +%Y%m%d_%H%M%SZ)_${DT_GIT_REF:-unknown}"
+    mkdir -p "$LOG_DIR"
+    export ROS_LOG_DIR="$LOG_DIR/ros"
+    echo "==================== LAB EVIDENCE -> $LOG_DIR ===================="
+    echo "  console.log : full launch console (tee of this terminal)"
+    echo "  bag/        : ros2 bag — /dt/* + Nav2 plans/cmds + scans + TF + /rosout (replayable forensics)"
+    echo "  ros/        : per-node ROS log files (ROS_LOG_DIR)"
+    echo "  sync CSV    : sync_supervisor writes sync_metrics_*.csv here (log_dir:= launch arg)"
+    echo "  >> copy this folder to USB/OneDrive BEFORE leaving — the laptop can be wiped <<"
+    ros2 bag record -o "$LOG_DIR/bag" \
+      /rosout /tf /tf_static /scan /odom /battery_state /amcl_pose /plan /local_plan \
+      /cmd_vel_nav /cmd_vel_smoothed /cmd_vel /dt/cmd_vel_raw /dt/scan_nav /dt/safety \
+      /dt/estop /dt/sync_ok /dt/sync_error /dt/latency_ms /dt/alerts /dt/mode /dt/localized \
+      /dt/real_pose /dt/sim_pose /dt/mission_state /dt/resync_event \
+      /sim/cmd_vel /sim/scan /sim/odom /sim/ground_truth /clock \
+      >"$LOG_DIR/bag_record.log" 2>&1 &
+    DT_BAG_PID=$!
+    trap "echo; echo \"== lab evidence saved in: $LOG_DIR — copy it off the machine ==\"; kill $DT_BAG_PID 2>/dev/null" EXIT
+    DT_LAUNCH_ARGS="$DT_LAUNCH_ARGS log_dir:=$LOG_DIR"
+    echo "-- ros2 launch algae_dt bringup.launch.py mode:=$DT_MODE $DT_LAUNCH_ARGS --"
+    ros2 launch algae_dt bringup.launch.py mode:="$DT_MODE" $DT_LAUNCH_ARGS 2>&1 | tee "$LOG_DIR/console.log"
+  else
+    echo "-- ros2 launch algae_dt bringup.launch.py mode:=$DT_MODE $DT_LAUNCH_ARGS (--no-log) --"
+    exec ros2 launch algae_dt bringup.launch.py mode:="$DT_MODE" $DT_LAUNCH_ARGS
+  fi
 '
 
 if [ "$RUNTIME" = native ]; then
@@ -239,6 +274,7 @@ if [ "$RUNTIME" = native ]; then
   # make the robot's /scan invisible with a misleading diagnosis — neutralize it explicitly.
   exec env TURTLEBOT3_MODEL=burger LDS_MODEL=LDS-02 ROS_DOMAIN_ID="$DOMAIN" ROS_LOCALHOST_ONLY=0 \
        DT_WS="$WS" DT_MODE="$MODE" DT_LAUNCH_ARGS="$LAUNCH_ARGS" LAB_RUN_DRY="${LAB_RUN_DRY:-}" \
+       DT_GIT_REF="$GIT_REF" DT_NO_LOG="$NO_LOG" \
        bash -c "$PAYLOAD"
 fi
 
@@ -265,4 +301,5 @@ exec docker run --rm -it --name "$CONTAINER" --net=host \
   -v "$WS:/ws" -w /ws -e HOME=/ws \
   -e TURTLEBOT3_MODEL=burger -e ROS_DOMAIN_ID="$DOMAIN" -e ROS_LOCALHOST_ONLY=0 \
   -e DT_WS=/ws -e DT_MODE="$MODE" -e DT_LAUNCH_ARGS="$LAUNCH_ARGS" -e LAB_RUN_DRY="${LAB_RUN_DRY:-}" \
+  -e DT_GIT_REF="$GIT_REF" -e DT_NO_LOG="$NO_LOG" \
   --user "$(id -u):$(id -g)" "$IMAGE" bash -lc "$PAYLOAD"

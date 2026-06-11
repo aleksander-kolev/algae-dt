@@ -7,7 +7,11 @@ A bidirectional digital twin for a TU/e 2IRR10 algae-bloom cleaning robot. A rea
 Burger and a Gazebo Harmonic twin run in parallel with state synchronisation between them. An
 operator places algae blooms on a map; the active robot navigates to each one with Nav2 (avoiding
 static and dynamic obstacles), drives to the centre and spins three full turns in place
-("spraying"), then moves on. A 25 cm dual-LiDAR safety gate stops forward motion in either world.
+("spraying"), then moves on. A 25 cm dual-LiDAR safety gate stops forward motion in either world —
+and the stop is **sticky**: it releases only after the path ahead stays clear (0.35 m for 0.3 s),
+so allowed rotation can never flicker the obstacle out of the front cone and creep past it. An
+obstacle placed in the *virtual* world enters the real robot's costmaps too (`/dt/scan_nav`), so
+Nav2 visibly plans around things that exist only in the twin.
 The real-vs-sim divergence is continuously measured against documented tolerances — and **bounded**:
 when the pose error stays out of tolerance, the twin snaps the mirror back onto the real robot
 (an operator **RESYNC** button, or automatically), with every correction logged as evidence.
@@ -60,7 +64,11 @@ algae-dt/
 │  │     ├─ occupancy.py          static-map occupancy + goal projection + the map-raycast LiDAR
 │  │     ├─ trajectory.py         sinusoidal path for the moving obstacle
 │  │     ├─ resync.py             the drift-correction policy (manual/auto, sustain, cooldown)
-│  │     └─ gzcli.py              gz service CLI helpers (set_pose/create request plumbing)
+│  │     ├─ gzcli.py              gz service CLI helpers (set_pose/create request plumbing)
+│  │     ├─ scanmerge.py          overlays the trusted mirror's LiDAR onto the real scan, by angle
+│  │     │                        (what lets virtual obstacles shape REAL navigation)
+│  │     └─ nav2check.py          fail-loud preflight: the stock Nav2 params must carry every key
+│  │                              the launch rewrites, or the safety chokepoint silently no-ops
 │  ├─ launch/bringup.launch.py    orchestrates the stock stack + Nav2 + our layer for each mode
 │  ├─ config/twin.yaml            all tunables (safety, sync tolerances, spray, battery, map dims)
 │  ├─ config/sim_bridge.yaml      ros_gz bridge that puts the mirror sim on /sim/* (both mode)
@@ -235,10 +243,20 @@ ros2 launch turtlebot3_bringup robot.launch.py        # leave this running
 ./scripts/lab_run.sh                 # full real+sim demo
 ./scripts/lab_run.sh --sim           # hardware-free sim_only fallback (no robot needed)
 ./scripts/lab_run.sh --rebuild       # clean colcon build first
+./scripts/lab_run.sh --no-log        # skip the default evidence recording (below)
 ```
 
 Overrides if your robot differs: `ROBOT_IP=… ROS_DOMAIN_ID=… ./scripts/lab_run.sh`. Force a
 runtime with `--native` / `--docker`.
+
+**Every run records evidence by default** into `~/turtlebot3_ws/lab_logs/<UTC-stamp>_<commit>/`:
+the full launch console (`console.log`), a replayable `ros2 bag` of `/dt/*` + Nav2's plans and
+commands + both scans + TF + `/rosout` (`bag/` — inspect with `ros2 bag info`, replay with
+`ros2 bag play`), the per-node ROS logs (`ros/`), and the sync supervisor's `sync_metrics_*.csv`.
+Copy that folder to USB/OneDrive **before leaving** — the laptop can be wiped. If the script exits
+with **code 6**, the preflight found this machine's `turtlebot3_navigation2` params file cannot
+host the safety chokepoint (Nav2 would drive the robot UNGATED): update `~/turtlebot3_ws/src`
+(turtlebot3, jazzy branch) and rebuild, or demo with `--sim`.
 
 ### If the script doesn't work — fully manual
 
@@ -343,8 +361,17 @@ teleop / GUI / Nav2 controller  ──►  /dt/cmd_vel_raw  ──►  twin_medi
 The active robot is always on the bare topics (`/scan`, `/odom`, `/cmd_vel`, `/battery_state`); in
 `both` the mirror sim lives entirely on `/sim/*` so the two never collide. Everything the GUI and the
 sync supervisor consume is published on `/dt/*` (`/dt/real_pose`, `/dt/sim_pose`, `/dt/scan_active`,
-`/dt/sync_error`, `/dt/latency_ms`, `/dt/sync_ok`, `/dt/alerts`, `/dt/safety`, `/dt/health`,
-`/dt/estop`, `/dt/mode`, `/dt/localized`, `/dt/markers`, `/dt/mission_state`).
+`/dt/scan_nav`, `/dt/sync_error`, `/dt/latency_ms`, `/dt/sync_ok`, `/dt/alerts`, `/dt/safety`,
+`/dt/health`, `/dt/estop`, `/dt/mode`, `/dt/localized`, `/dt/markers`, `/dt/mission_state`).
+
+`/dt/scan_nav` is what Nav2's *obstacle* sources (costmap layers + collision monitor) read instead
+of the raw `/scan`: normally a verbatim pass-through, but in `both` — while the twin is in sync —
+the trusted mirror's laser returns are merged in (by angle; the LDS-02 and the Gazebo lidar index
+their beams differently), so an obstacle dropped in the virtual world makes the REAL robot plan
+around it. AMCL deliberately keeps the bare `/scan`: localization must never see virtual returns,
+and an out-of-sync mirror is excluded exactly as it is from the safety gate. In `both` the mirror's
+`/sim/cmd_vel` is also scaled by the measured real-time factor (clamped 1/RTF), so a slow sim still
+covers the real robot's ground per wall-clock second instead of structurally under-travelling.
 
 In `both`, `/dt/sim_pose` is the mirror's Gazebo **ground-truth** pose (`/sim/ground_truth`, from
 the pose publisher in `worlds/burger_sim_gt.sdf`; the world frame equals the map frame by
@@ -355,8 +382,12 @@ measured sync error all move together, and the executed correction is published 
 `/dt/resync_event` and stamped into the sync CSV's `resync` column.
 
 Note for Jazzy: `/cmd_vel` is `geometry_msgs/TwistStamped` (both the real bringup and Gazebo expect
-it stamped), so the whole bus is `TwistStamped`. The launch sets `enable_stamped_cmd_vel:true` on
-Nav2 and remaps its controller output onto `/dt/cmd_vel_raw`.
+it stamped), so the whole bus is `TwistStamped`. The launch reroutes Nav2's *final* velocity (the
+collision monitor's `cmd_vel_out_topic`) onto `/dt/cmd_vel_raw`, caps Nav2's planned speed at the
+Burger's real 0.22 m/s ceiling (the stock file plans 0.3 — saturated wheels executed every fast arc
+tighter than the RViz plan), and **preflight-verifies** (`lib/nav2check.py`) that the stock params
+file actually carries every rewritten key — a missing key is a silent no-op that would leave Nav2
+driving the robot ungated, so a real mode refuses to launch on a compromised file.
 
 ---
 
@@ -390,16 +421,27 @@ matches `maps/map.yaml`/`maps/map.pgm`.
   `ros2 topic pub -r 10 /dt/cmd_vel_raw geometry_msgs/msg/TwistStamped "{twist: {angular: {z: 1.0}}}"`,
   stepping `z` up; check `/battery_state` voltage under load (want ≥ ~11.5 V).
 - **Real robot doesn't follow the RViz path / weaves toward walls (RViz itself looks perfect):**
-  first watch the console SAFETY banner — if it flashes BLOCKED while the real path is clear,
-  that was the *diverged sim mirror* grazing virtual geometry and phantom-braking the real robot
-  through the dual-LiDAR gate (forward chopped, rotation preserved → the robot curls off its
-  path). Fixed: the mirror's scan now vetoes the real robot only while the twin is in sync
-  (`/dt/sync_ok`); the real robot's own LiDAR always gates. If nav still misbehaves with SAFETY
+  FIRST check there is exactly **one** publisher on the motor topic: `ros2 topic info -v /cmd_vel`
+  must list only `twin_mediator` — two or more means Nav2 is bypassing the safety bus (the params
+  file lost the chokepoint keys; the `nav2check` preflight should have refused to start). Then
+  watch the console SAFETY banner — if it flashes BLOCKED while the real path is clear, that was
+  the *diverged sim mirror* grazing virtual geometry and phantom-braking the real robot through
+  the dual-LiDAR gate (forward chopped, rotation preserved → the robot curls off its path).
+  Fixed: the mirror's scan now vetoes the real robot only while the twin is in sync
+  (`/dt/sync_ok`); the real robot's own LiDAR always gates. Also fixed at the source: Nav2's plan
+  is capped at the Burger's true 0.22 m/s (saturated wheels used to bend every fast arc tighter
+  than planned) and the command clamp preserves curvature. If nav still misbehaves with SAFETY
   green: re-check localization mid-drive (red scan points must sit ON the map walls — if they
   detach, re-do the 2D Pose Estimate), remember the shared arena (other robots/people are real
   obstacles NOT on the map — Nav2 legitimately detours), and tune inflation at runtime:
   `ros2 param set /global_costmap/global_costmap inflation_layer.inflation_radius 0.25` (and the
   same on `/local_costmap/local_costmap`), then clear both costmaps.
+- **The safety stop seems to "not work" while navigating at an obstacle:** the robot used to
+  rotate the box out of its ±20° front cone and lurch-creep past it (forward unblocked the instant
+  the cone read clear). The stop now **latches** — forward stays cut until the cone reads beyond
+  0.35 m for 0.3 s sustained; rotation/back-up keep working throughout. Every lab run's bag
+  (`lab_logs/<stamp>/bag`) records `/dt/safety`, `/dt/scan_nav` and `/cmd_vel` for after-the-fact
+  proof of exactly when and why the gate held.
 - **Workspace build complains about symlinks / a stale tree:**
   `rm -rf build/ install/ log/ && colcon build --packages-select algae_dt`.
 - **Workspace was copied from another machine** (CMake errors naming a foreign path,

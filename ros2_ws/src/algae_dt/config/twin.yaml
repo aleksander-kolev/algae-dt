@@ -27,6 +27,14 @@
                                    # SCOPE: the 25 cm guarantee covers this +/-20 deg cone, NOT the
                                    # robot's front corners — an obstacle at e.g. 30 deg and 0.20 m is
                                    # ungated by design (course value; corners are Nav2 costmap's job).
+    stop_release_m: 0.35           # STICKY-STOP hysteresis (lib.safety.BlockLatch; lab 2026-06 "the
+                                   # safety stop doesn't work"): once blocked, forward stays cut until
+                                   # the front range exceeds THIS (not just stop_distance_m)…
+    stop_release_hold_s: 0.3       # …continuously for this long. Under a live Nav2 goal, allowed
+                                   # rotation swung the obstacle out of the ±20° cone for an instant,
+                                   # forward re-enabled, and the robot lurch-crept past the box. The
+                                   # 0.10 m band + 0.3 s hold kill the flicker; rotation/back-up stay
+                                   # allowed throughout (course rule), and startup no-data never latches.
     max_linear_mps: 0.22           # Burger hardware max forward speed; the mediator clamps Nav2's
                                    # planned max_speed_xy (0.3) down to this real limit (correct, expected).
     max_angular_radps: 2.84        # mediator's FINAL angular clamp (safety authority) = the Burger
@@ -105,6 +113,18 @@
     # /dt/sim_pose in `both` is gz GROUND TRUTH (sim_bridge.yaml /sim/ground_truth): the teleport
     # moves pose + LiDAR view + measured error together. Every execution lands in the CSV's
     # `resync` column (evidence drift was corrected); a failed gz call raises /dt/alerts.
+    # --- both-mode mirror fidelity (RTF compensation; lab 2026-06 "the twin doesn't take the
+    # --- path the real one takes") ---
+    rtf_comp_enable: true          # scale the SIM fan-out by 1/RTF (clamped): gz integrates
+                                   # /sim/cmd_vel in SIM time, so at real-time-factor < 1 the
+                                   # open-loop mirror under-travels per WALL second and turns in
+                                   # the wrong places. Compensation keeps the mirror covering the
+                                   # real Burger's ground per wall second; residual drift remains
+                                   # twin_resync's job. At RTF~1 (healthy lab GPU) it is a no-op.
+    rtf_comp_max: 3.0              # clamp of the 1/RTF factor (and its inverse for RTF > 1): a
+                                   # paused/hiccuping sim must never explode the mirror's speed.
+    rtf_window_s: 3.0              # sliding /clock-vs-wall window for the RTF estimate (lib.sync).
+
     world: default                 # gz world name (worlds/algae_arena.world <world name='default'>);
                                    # shared with dynamic_obstacle — same world, single source.
     sim_entity_name: burger_sim    # the mirror entity bringup.launch.py spawns in `both`
