@@ -389,11 +389,15 @@ matches `maps/map.yaml`/`maps/map.pgm`.
   Burger's motor ceiling, unreachable under battery sag). Isolate with
   `ros2 topic pub -r 10 /dt/cmd_vel_raw geometry_msgs/msg/TwistStamped "{twist: {angular: {z: 1.0}}}"`,
   stepping `z` up; check `/battery_state` voltage under load (want ≥ ~11.5 V).
-- **Real robot doesn't follow the RViz path / weaves toward walls:** almost always
-  mislocalization — mid-drive, the red scan points must sit ON the map walls; if they detach,
-  stop and re-do the 2D Pose Estimate. Remember the arena is shared: other robots/people are
-  real obstacles that are NOT on the map, so Nav2 legitimately detours around them. Inflation can
-  be tuned at runtime without a rebuild:
+- **Real robot doesn't follow the RViz path / weaves toward walls (RViz itself looks perfect):**
+  first watch the console SAFETY banner — if it flashes BLOCKED while the real path is clear,
+  that was the *diverged sim mirror* grazing virtual geometry and phantom-braking the real robot
+  through the dual-LiDAR gate (forward chopped, rotation preserved → the robot curls off its
+  path). Fixed: the mirror's scan now vetoes the real robot only while the twin is in sync
+  (`/dt/sync_ok`); the real robot's own LiDAR always gates. If nav still misbehaves with SAFETY
+  green: re-check localization mid-drive (red scan points must sit ON the map walls — if they
+  detach, re-do the 2D Pose Estimate), remember the shared arena (other robots/people are real
+  obstacles NOT on the map — Nav2 legitimately detours), and tune inflation at runtime:
   `ros2 param set /global_costmap/global_costmap inflation_layer.inflation_radius 0.25` (and the
   same on `/local_costmap/local_costmap`), then clear both costmaps.
 - **Workspace build complains about symlinks / a stale tree:**

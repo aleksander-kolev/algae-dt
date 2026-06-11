@@ -93,6 +93,15 @@ class TwinMediator(Node):
         # pack healthy. sim_only's battery is synthetic + mediator-owned (resets with the demo), so it
         # keeps its immediate-clear startup.
         self._estop_startup_hold = (self.mode != 'sim_only')
+        # Mirror-scan trust (both only): the sim scan may veto the REAL robot's forward motion
+        # ONLY while the twin is IN SYNC. A diverged mirror measures the wrong place — in the lab
+        # it grazed gz geometry the real robot had cleared and PHANTOM-BRAKED the real robot in
+        # bursts (DWB then replanned around stops that didn't exist → stuttering, weaving,
+        # "doesn't follow its own path"). In tolerance, the mirror stands where the real robot
+        # stands, so its virtual-obstacle veto is meaningful (the pillar-③ box demo still stops
+        # BOTH). Out of tolerance, the veto is misinformation and the auto-resync is already
+        # correcting the divergence. The REAL robot's own LiDAR always gates regardless.
+        self._sync_ok = True                  # default trust until the supervisor says otherwise
         self._shadow = (0.0, 0.0, 0.0)        # commanded shadow pose (sim_only /dt/real_pose), MAP frame
         self._shadow_t: float | None = None
         self._shadow_anchored = False         # shadow is anchored to the robot's first map pose
@@ -132,6 +141,7 @@ class TwinMediator(Node):
         if self._both:
             self.create_subscription(LaserScan, '/sim/scan', self._on_sim_scan, qos_profile_sensor_data)
             self.create_subscription(TFMessage, '/sim/ground_truth', self._on_sim_ground_truth, 10)
+            self.create_subscription(Bool, '/dt/sync_ok', self._on_sync_ok, _latched())
 
         # --- TF: map<-odom (AMCL) so /dt/*_pose are published in the MAP frame the GUI overlays on ---
         self._tf_buffer = Buffer()
@@ -201,6 +211,14 @@ class TwinMediator(Node):
     def _on_sim_scan(self, msg: LaserScan) -> None:
         self._sim_scan = msg
         self._sim_scan_t = self._now()
+
+    def _on_sync_ok(self, msg: Bool) -> None:
+        if self._sync_ok and not msg.data:
+            self.get_logger().info(
+                "twin out of sync: the mirror's scan no longer gates the real robot "
+                "(it measures the wrong place) until the twin re-syncs",
+                throttle_duration_sec=5.0)
+        self._sync_ok = bool(msg.data)
 
     def _on_odom(self, msg: Odometry) -> None:
         # NOTE: /dt/odom_active is a raw pass-through and stays in the ODOM frame (sync_supervisor
@@ -297,8 +315,11 @@ class TwinMediator(Node):
     def _on_cmd_timer(self) -> None:
         now = self._now()
         active = self._scan_status(self._scan, self._scan_t, now)
+        # The mirror participates in the gate only while TRUSTED (in sync): see __init__. An
+        # untrusted mirror is excluded exactly like the no-mirror modes — its staleness must not
+        # fail-safe-block either (no data ≠ danger when the data describes the wrong place).
         mirror = (self._scan_status(self._sim_scan, self._sim_scan_t, now)
-                  if self._both else safety.ScanStatus(False, INF, 0.0))
+                  if self._both and self._sync_ok else safety.ScanStatus(False, INF, 0.0))
         blocked = safety.gate(active, mirror, self.stop_distance_m, self.max_data_age_s,
                               sim_max_data_age_s=self.sim_max_data_age_s)
 
