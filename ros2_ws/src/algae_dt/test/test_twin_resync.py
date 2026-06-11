@@ -16,10 +16,17 @@ from geometry_msgs.msg import PoseStamped, Vector3            # noqa: E402
 from rclpy.executors import SingleThreadedExecutor            # noqa: E402
 from rclpy.node import Node                                    # noqa: E402
 from rclpy.parameter import Parameter                          # noqa: E402
-from std_msgs.msg import Empty, String                         # noqa: E402
+from rclpy.qos import (DurabilityPolicy, QoSProfile,           # noqa: E402
+                       ReliabilityPolicy)
+from std_msgs.msg import Bool, Empty, String                   # noqa: E402
 
 from algae_dt.lib import geometry                              # noqa: E402
 from algae_dt.twin_resync import TwinResync                    # noqa: E402
+
+
+def _latched():
+    return QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                      durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
 FAST = [
     Parameter('mode', Parameter.Type.STRING, 'both'),
@@ -43,7 +50,7 @@ class FakeGz(TwinResync):
 
 
 class Harness(Node):
-    def __init__(self):
+    def __init__(self, localized: bool = True):
         super().__init__('resync_test_harness')
         self.real = (1.2, -0.4, 1.5)
         self.err = (0.0, 0.0)
@@ -52,6 +59,8 @@ class Harness(Node):
         self.p_cmd = self.create_publisher(Empty, '/dt/resync_cmd', 10)
         self.p_err = self.create_publisher(Vector3, '/dt/sync_error', 10)
         self.p_real = self.create_publisher(PoseStamped, '/dt/real_pose', 10)
+        self.p_localized = self.create_publisher(Bool, '/dt/localized', _latched())
+        self.p_localized.publish(Bool(data=localized))   # latched, like the mediator's
         self.create_subscription(String, '/dt/resync_event',
                                  lambda m: setattr(self, 'last_event', m.data), 10)
         self.create_subscription(String, '/dt/alerts',
@@ -67,10 +76,10 @@ class Harness(Node):
         self.p_err.publish(Vector3(x=self.err[0], y=self.err[1]))
 
 
-def _world(node_cls=FakeGz, overrides=(), **node_kw):
+def _world(node_cls=FakeGz, overrides=(), localized=True, **node_kw):
     rclpy.init()
     node = node_cls(parameter_overrides=FAST + list(overrides), **node_kw)
-    har = Harness()
+    har = Harness(localized=localized)
     ex = SingleThreadedExecutor()
     ex.add_node(node)
     ex.add_node(har)
@@ -160,6 +169,30 @@ def test_resync_idles_outside_both_mode():
         _spin_until(ex, lambda: False, secs=1.0)
         assert har.last_event is None and node.requests == [], \
             "sim_only has no mirror sim: the node must idle (no timer, click refused)"
+    finally:
+        _teardown(node, har, ex)
+
+
+def test_no_resync_until_amcl_is_localized():
+    """REAL-LAB GUARD: before the operator's 2D Pose Estimate, /dt/real_pose is identity-lifted
+    odom with NO map meaning — a fire then could teleport the mirror into a wall, whose scan would
+    then block the REAL robot through the dual-LiDAR gate. With fresh poses + errors but
+    /dt/localized False, neither a click nor a sustained breach may fire; flipping localized True
+    releases the queued click."""
+    node, har, ex = _world(localized=False)
+    try:
+        _spin_until(ex, lambda: node._t_real is not None, secs=3.0)   # inputs ARE flowing
+        har.err = (0.50, 0.50)                                        # sustained breach...
+        har.p_cmd.publish(Empty())                                    # ...AND an operator click
+        _spin_until(ex, lambda: False, secs=1.2)
+        assert node.requests == [] and har.last_event is None, \
+            "unlocalized pose must refuse every fire (manual AND auto)"
+        assert node._pending_manual is True, "the click stays queued, not dropped"
+        har.err = (0.0, 0.0)                                          # back in tolerance
+        har.p_localized.publish(Bool(data=True))                      # 2D Pose Estimate lands
+        assert _spin_until(ex, lambda: har.last_event is not None), \
+            "localization must release the queued manual resync"
+        assert har.last_event.startswith('manual')
     finally:
         _teardown(node, har, ex)
 

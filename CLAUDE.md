@@ -69,10 +69,12 @@ Nodes:
   pre-safety command bus `/dt/cmd_vel_raw` (**`TwistStamped`** — Jazzy norm; see the type contract
   below) + both scans; applies the **25 cm dual-LiDAR safety gate**; fans the safe command out to
   **`/cmd_vel` (TwistStamped, real)** AND **`/sim/cmd_vel` (sim, type verified at runtime)**.
-  Mirrors `/odom`→`/dt/real_pose`, sim pose (`/sim/odom`)→`/dt/sim_pose`,
+  Mirrors `/odom`→`/dt/real_pose` (AMCL map←odom lift), the sim pose→`/dt/sim_pose` (bare `/odom`
+  in `sim_only`; **`/sim/ground_truth`** in `both`),
   `/battery_state`→`/dt/health` (synthetic battery in `sim_only`). Owns/publishes the latched
-  **`/dt/estop`**, **`/dt/mode`** (latched), **`/dt/safety`** (Bool). Republishes the ACTIVE robot's
-  scan/odom to `/dt/scan_active` + `/dt/odom_active`.
+  **`/dt/estop`**, **`/dt/mode`** (latched), **`/dt/safety`** (Bool), **`/dt/localized`** (latched
+  Bool: flips True on the first successful map←odom lookup — the gate twin_resync fires behind).
+  Republishes the ACTIVE robot's scan/odom to `/dt/scan_active` + `/dt/odom_active`.
 - **`sync_supervisor`** — the course's **Real-Time Synchronization & Tolerances** deliverable.
   Computes pose/sensor discrepancy + command→motion latency; publishes `/dt/sync_error`,
   `/dt/latency_ms`, `/dt/sync_ok` (Bool); **logs a CSV** (incl. a `resync` column) and **publishes
@@ -81,7 +83,9 @@ Nodes:
 - **`twin_resync`** (`both` only) — bounded-drift correction ("predict with the model, correct with
   the data"): teleports the sim entity onto `/dt/real_pose` via gz `set_pose` on the GUI **RESYNC
   TWIN** button (`/dt/resync_cmd`) or automatically once the pose error stays out of tolerance for
-  `resync_sustain_s` (cooldown-spaced; stale inputs refuse). Publishes `/dt/resync_event`; a failed
+  `resync_sustain_s` (cooldown-spaced; stale inputs refuse; **every fire waits for `/dt/localized`**
+  — pre-AMCL the real pose has no map meaning and a snap could wedge the mirror into a wall, whose
+  scan would block the REAL robot through the dual gate). Publishes `/dt/resync_event`; a failed
   gz call raises `/dt/alerts`. Works because `/dt/sim_pose` in `both` is **gz GROUND TRUTH**
   (`/sim/ground_truth` ← the PosePublisher in `worlds/burger_sim_gt.sdf`; world frame == map frame
   by construction), so a teleport moves pose + LiDAR view + measured error together. Policy in
@@ -93,7 +97,8 @@ Nodes:
   overlay, bloom markers, click-to-place, Start/Stop/Clear/E-STOP/RESYNC-TWIN, banners (mode/sync/
   latency/battery/safety/mission; the sync banner notes recent resyncs). Subscribes `/dt/*` only.
 - Teleop = stock **`turtlebot3_teleop`** remapped `-r /cmd_vel:=/dt/cmd_vel_raw` (no custom teleop).
-- Pure libs (no ROS, unit-tested): `lib/{geometry,safety,blooms,sync,metrics,pgm,hud,occupancy,trajectory}.py`.
+- Pure libs (no ROS, unit-tested):
+  `lib/{geometry,safety,blooms,sync,metrics,pgm,hud,occupancy,trajectory,resync,gzcli}.py`.
 
 ### Modes (`ros2 launch algae_dt bringup.launch.py mode:=...`)
 - `sim_only` (default; the **primary develop/test target** at home): `turtlebot3_gazebo` + Nav2 + our DT layer.
@@ -115,8 +120,10 @@ Nodes:
   `/sim/odom` still feeds the supervisor's motion/stop-skew detection).
 - Digital (`/dt/*`): `/dt/cmd_vel_raw /dt/real_pose /dt/sim_pose /dt/scan_active /dt/odom_active
   /dt/sync_error /dt/latency_ms /dt/sync_ok(Bool) /dt/alerts(String) /dt/safety(Bool) /dt/mode(String)
-  /dt/health /dt/estop(Bool,latched) /dt/estop_cmd(Bool, GUI→mediator request) /dt/resync_cmd(Empty,
-  GUI→twin_resync request) /dt/resync_event(String, executed resyncs→CSV+GUI) /dt/blooms(MarkerArray) /dt/markers /dt/mission_state /dt/mission_cmd`.
+  /dt/health /dt/estop(Bool,latched) /dt/estop_cmd(Bool, GUI→mediator request) /dt/localized(Bool,
+  latched — AMCL map←odom resolved) /dt/resync_cmd(Empty, GUI→twin_resync request)
+  /dt/resync_event(String, executed resyncs→CSV+GUI) /dt/battery_override_v(Float64, sim_only demo
+  override) /dt/blooms(MarkerArray) /dt/markers /dt/mission_state /dt/mission_cmd`.
 - **Topic-collision rule (course-stated, critical): real and sim must NEVER publish the same topic
   name.** Real = bare, sim = `/sim/*`, sim TF off the global `/tf` in `both`.
 

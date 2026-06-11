@@ -26,7 +26,10 @@ are video/presentation — confirm the split on Canvas; `docs/SUBMISSION.md`).
 - Real → Digital: `/odom`→`/dt/real_pose`, `/scan`→safety+GUI, `/battery_state`→`/dt/health`.
 - Digital → Real: `/dt/cmd_vel_raw` → `/cmd_vel` (TwistStamped).
 - Digital → Sim: `/dt/cmd_vel_raw` → `/sim/cmd_vel`.
-- Sim → Digital: `/sim/scan`, `/sim/odom`, sim pose → `/dt/sim_pose`.
+- Sim → Digital: `/sim/scan` (gates the REAL robot too), `/sim/odom` (motion/stop-skew),
+  `/sim/ground_truth` → `/dt/sim_pose`.
+- Digital → Sim (state): twin_resync's gz `set_pose` snaps the mirror onto the real pose
+  (bounded-drift correction — operator button or auto).
 
 **Evidence:** `ros2 topic list` + `rqt_graph`; `ros2 topic echo` showing live traffic each direction;
 a command typed in teleop/GUI moves BOTH robots; an obstacle in either world is reflected in the DT.
@@ -52,7 +55,9 @@ digital→real arrows are demonstrable at home without a robot.
   correction lands in the CSV `resync` column (the predict/correct loop, demonstrable on cue).
 - **Demonstrable in `sim_only` (the fallback env):** with no real robot, sync error = COMMANDED
   (integrated from `/dt/cmd_vel_raw`) vs ACHIEVED sim pose (`sim_only_sync_source: commanded`) — so
-  pillar ② is shown even without hardware. Latency = mediator command stamp → sim motion onset.
+  pillar ② is shown even without hardware. Latency = `/cmd_vel` rising-edge arrival → motion onset
+on `/dt/odom_active`, both timestamped on the supervisor's own clock (header stamps cross clock
+domains and are deliberately unused — see twin.yaml).
 
 **Evidence:** the generated `sync_metrics_<run>.csv` (incl. `resync` rows); a screenshot/recording
 of the GUI sync banner going amber when you nudge the sim out of tolerance and snapping back on

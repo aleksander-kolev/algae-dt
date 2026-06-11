@@ -33,12 +33,18 @@ import functools
 import rclpy
 from geometry_msgs.msg import PoseStamped, Vector3
 from rclpy.node import Node
-from std_msgs.msg import Empty, String
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from std_msgs.msg import Bool, Empty, String
 
 from algae_dt.lib import geometry, gzcli, resync
 from algae_dt.lib.ros_utils import declare_get
 
 NAN = float('nan')
+
+
+def _latched() -> QoSProfile:
+    return QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                      durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
 
 class TwinResync(Node):
@@ -66,6 +72,12 @@ class TwinResync(Node):
         self._t_err: float | None = None
         self._real: tuple[float, float, float] | None = None
         self._t_real: float | None = None
+        # /dt/real_pose is the TELEPORT TARGET, and it only has map meaning once AMCL resolved
+        # map<-odom (the mediator's latched /dt/localized). Pre-seed it is identity-lifted odom:
+        # firing then could snap the mirror into a wall, whose scan would then BLOCK THE REAL
+        # ROBOT through the dual-LiDAR gate. Until localized, every fire (manual included) is
+        # refused — a click queues and executes once the 2D Pose Estimate lands.
+        self._localized = False
 
         self.pub_event = self.create_publisher(String, '/dt/resync_event', 10)
         self.pub_alerts = self.create_publisher(String, '/dt/alerts', 10)
@@ -75,6 +87,7 @@ class TwinResync(Node):
         self.create_subscription(Empty, '/dt/resync_cmd', self._on_resync_cmd, 10)
         self.create_subscription(Vector3, '/dt/sync_error', self._on_sync_error, 10)
         self.create_subscription(PoseStamped, '/dt/real_pose', self._on_real_pose, 10)
+        self.create_subscription(Bool, '/dt/localized', self._on_localized, _latched())
 
         if self.mode == 'both':
             self.create_timer(1.0 / self.tick_hz, self._on_tick)
@@ -100,6 +113,11 @@ class TwinResync(Node):
         self._real = geometry.pose_xyyaw(msg.pose)
         self._t_real = self._now()
 
+    def _on_localized(self, msg: Bool) -> None:
+        if msg.data and not self._localized:
+            self.get_logger().info("AMCL localized: resync armed")
+        self._localized = bool(msg.data)
+
     def _on_resync_cmd(self, _msg: Empty) -> None:
         if self.mode != 'both':
             self.get_logger().warn(
@@ -108,11 +126,18 @@ class TwinResync(Node):
         # Latch the intent: a click during the cooldown / a stream gap fires as soon as the
         # policy allows instead of being silently dropped.
         self._pending_manual = True
-        self.get_logger().info("operator RESYNC requested")
+        if not self._localized:
+            self.get_logger().warn(
+                "RESYNC queued: AMCL is not localized yet (RViz 2D Pose Estimate) — the real "
+                "pose has no map meaning, so the snap waits for localization")
+        else:
+            self.get_logger().info("operator RESYNC requested")
 
     # --------------------------------------------------------------- the loop
     def _inputs_fresh(self, now: float) -> bool:
-        return (self._t_real is not None and (now - self._t_real) <= self.input_max_age_s
+        """Trustworthy-to-fire: fresh target + fresh error + a MAP-localized pose (AMCL up)."""
+        return (self._localized
+                and self._t_real is not None and (now - self._t_real) <= self.input_max_age_s
                 and self._t_err is not None and (now - self._t_err) <= self.input_max_age_s)
 
     def _on_tick(self) -> None:

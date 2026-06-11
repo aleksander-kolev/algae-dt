@@ -11,7 +11,7 @@ pure libs, integration-tested in `sim_only` before it ever goes to the lab. Task
 
 > **IMPLEMENTATION STATUS — Phases 1→7 DONE, TDD, integration-verified.** All 11 pure libs + 5 nodes
 > (+ `fake_robot`, `dynamic_obstacle`) implemented; full `bringup.launch.py` (sim_only|real_only|both
-> + headless/use_fake_robot); reproducible `algae-dt:dev` image. **239 tests pass** + clean
+> + headless/use_fake_robot); reproducible `algae-dt:dev` image. **252 tests pass** + clean
 > `colcon build`; `sim_only` runs end-to-end headless (Nav2 active, AMCL localized, TwistStamped
 > chokepoint); `both` collision-free with **ground-truth sim pose + bounded-drift resync** (live
 > round-trip gated by `docker/both_smoke.sh`). Evidence per deliverable → `docs/VERIFICATION.md`.
@@ -92,9 +92,10 @@ downloads — our nodes are exactly pub/sub built on this primitive), ROS 2 topi
 - **T3.1** `lib/sync.py` + `lib/metrics.py` (TDD). Define the measurements concretely (don't
   hand-wave the latency number — it's the highest-value graded item):
   - **pose discrepancy** Δxy, Δyaw between `/dt/real_pose` and `/dt/sim_pose`; **sensor delta** front-range.
-  - **command→motion latency:** the mediator stamps each `/dt/cmd_vel_raw` it forwards; the supervisor
-    marks motion onset when `|odom.twist.linear|>motion_eps_mps` OR `|angular|>motion_eps_radps`
-    (params in twin.yaml) and reports `t_motion − t_cmd` (clock = sim time in `sim_only`). Unit-tested.
+  - **command→motion latency:** the supervisor timestamps the `/cmd_vel` rising-edge ARRIVAL and the
+    matching `/dt/odom_active` motion onset (`|odom.twist.linear|>motion_eps_mps` OR
+    `|angular|>motion_eps_radps`, params in twin.yaml), BOTH on its own clock, and reports the
+    difference (header stamps cross clock domains — see twin.yaml). Unit-tested.
   - **sim_only sync source (so pillar ② is demonstrable in the fallback env):** with no real robot,
     the "shadow real pose" is the COMMANDED pose integrated from `/dt/cmd_vel_raw`; sync error =
     commanded-vs-achieved sim pose (`sim_only_sync_source: commanded` in twin.yaml) — same trick as
@@ -121,7 +122,8 @@ downloads — our nodes are exactly pub/sub built on this primitive), ROS 2 topi
 - **T5.1** Namespace `turtlebot3_gazebo` to `/sim/*`. This is MORE than a namespace push: the sim
   topics come from the **ros_gz bridge**, so you must **remap each bridged topic** (a `PushRosNamespace`
   won't rename gz-side topics), and decide TF handling. Simplest correct approach for `both`: the sim
-  is a **visual mirror only (no sim Nav2)** — drive it via `/sim/cmd_vel` + ground-truth `/sim/odom`,
+  is a **visual mirror only (no sim Nav2)** — drive it via `/sim/cmd_vel` (+ `/sim/odom` for motion
+  detection and `/sim/ground_truth` for the true pose),
   keep sim TF on `/sim/tf` OFF the global `/tf`, and avoid frame-name collisions entirely (don't put
   sim `base_link`/`odom`/`map` on the global tree). Hardest integration task — budget a full home session.
 - **T5.1b** **Validate the topic-collision rule entirely in sim BEFORE the lab:** port the old repo's
@@ -131,7 +133,7 @@ downloads — our nodes are exactly pub/sub built on this primitive), ROS 2 topi
   spending scarce lab time — and gives a hardware-independent ① demo for the reviews.
 - **T5.2** `mode:=both`: real leads (wall time), sim mirrors 1:1 via the mediator fan-out.
 - **T5.3** `mode:=real_only`: robot bringup (Pi) + `turtlebot3_navigation2` (AMCL) + DT layer; 2D Pose
-  Estimate workflow; gross arrival check disabled (odom-frame).
+  Estimate workflow; gross arrival check disabled (AMCL noise must not veto Nav2's own arrival).
 - **LAB tests:** connect (SETUP §3); teleop→real moves; 25 cm stop on real `/scan`; AMCL localize;
   one bloom navigate+spray; `both` mirrors. Tune inflation at runtime (no rebuild). Re-do 2D Pose
   Estimate after restarts. **← target state for Week-8 review.**

@@ -52,7 +52,7 @@ directly — everything is "shout into a channel / listen to a channel". This ma
 swap parts in and out (a simulated LiDAR publishes the same `/scan` topic as a real one).
 
 Key vocabulary used everywhere below:
-- **node** — one running program (we have six of our own).
+- **node** — one running program (we have seven of our own).
 - **topic** — a named message channel, e.g. `/cmd_vel` ("command velocity" = drive commands).
 - **message type** — the data structure on a topic, e.g. `LaserScan` (360 distances) or
   `TwistStamped` (a velocity command with a timestamp).
@@ -131,14 +131,15 @@ nothing moves while nothing errors — the #1 silent trap of this stack.
    /scan ───────>│  twin_mediator  │ 25 cm dual-LiDAR safety gate + E-STOP     │
    /sim/scan ───>│  (the choke-    │ + speed limits — applied ONCE, here       │
    /odom ───────>│   point)        │──────> /cmd_vel      (real robot)         │
-   /sim/odom ───>│                 │──────> /sim/cmd_vel  (sim mirror, `both`) │
-   /battery ────>│                 │──────> /dt/*  mirrors ─────────────────────┘
-                 └─────────────────┘
+   /sim/ground──>│                 │──────> /sim/cmd_vel  (sim mirror, `both`) │
+   _truth        │                 │──────> /dt/*  mirrors ─────────────────────┘
+   /battery ────>└─────────────────┘
                           │ /dt/real_pose, /dt/sim_pose, /cmd_vel, /dt/odom_active…
-                          v
-                 ┌─────────────────┐
-                 │ sync_supervisor │ measures: pose error, latency, stop-skew
-                 └─────────────────┘ publishes /dt/sync_error /dt/sync_ok /dt/alerts + CSV
+                          v        (/sim/odom feeds the supervisor's motion detection)
+                 ┌─────────────────┐          ┌──────────────┐
+                 │ sync_supervisor │ errors──>│  twin_resync │ `both`: snaps the sim onto the
+                 └─────────────────┘          └──────────────┘ real pose (gz set_pose) on the
+                   /dt/sync_error /dt/sync_ok /dt/alerts + CSV   button / sustained drift
 ```
 
 The design rule behind the whole thing: **every command goes through one chokepoint**
@@ -205,9 +206,11 @@ and a still-critical battery immediately re-trips on the next reading.
 
 **State mirroring.** The mediator also translates raw robot state into operator-friendly `/dt/*`
 topics: it lifts odometry into the **map frame** (using AMCL's correction) and publishes it as
-`/dt/real_pose` / `/dt/sim_pose`; it republishes the active scan as `/dt/scan_active` and raw
+`/dt/real_pose` (and as `/dt/sim_pose` in `sim_only`; in `both` the sim pose is Gazebo **ground
+truth** published verbatim — §4.7); it republishes the active scan as `/dt/scan_active` and raw
 odometry as `/dt/odom_active`; it forwards battery state to `/dt/health`; and it publishes the
-latched `/dt/estop`, `/dt/mode` and `/dt/safety` flags.
+latched `/dt/estop`, `/dt/mode`, `/dt/safety` and `/dt/localized` flags (the last flips True on
+the first successful map←odom lookup — the gate the resync fires behind).
 
 **The commanded shadow (sim_only's clever trick).** In `sim_only` there is no real robot, so what
 do you compare the sim against, to demonstrate pillar ② (sync)? Answer: against *what was
@@ -301,7 +304,8 @@ The interesting mechanisms:
 **What it does, simply:** a PyQt5 window. Left: the arena map with the robot(s), the live laser
 points, and the bloom markers (yellow = pending, blue = active, green = treated, grey =
 skipped); click to place a bloom. Right: status banners (mode, mission, sync, latency, battery,
-safety, E-STOP, alerts) and buttons (Start / Stop / Clear / E-STOP / Resume).
+safety, E-STOP, alerts) and buttons (Start / Stop / Clear / E-STOP / Resume / RESYNC TWIN — the
+last one enabled in `both` only, and the sync banner notes recent resyncs).
 
 Design choices worth understanding:
 - It is split into a Qt-free `GuiBridge` (the ROS side — testable without a display) and the
@@ -324,8 +328,8 @@ Design choices worth understanding:
 **What it does, simply:** pretends to be the real Burger so the `real_only` and `both` modes can
 be exercised at home with zero hardware. It subscribes the gated `/cmd_vel`, integrates the
 commands into a pose (the same unicycle maths as the shadow), and publishes everything a real
-Burger would: `/odom`, a synthetic 360-beam `/scan` (with a configurable fake obstacle dead
-ahead — set it under 0.25 m to test the safety stop), `/battery_state`, and the **full TF chain**
+Burger would: `/odom`, a synthetic 180-beam `/scan` (with an optional scripted obstacle dead
+ahead — set `fake_front_m` under 0.25 m to test the safety stop), `/battery_state`, and the **full TF chain**
 (`odom → base_footprint → base_link → base_scan`) that AMCL and Nav2 need to make sense of the
 laser. Like the real robot, it **stops when commands stop arriving** (0.5 s timeout) instead of
 coasting forever.
@@ -446,8 +450,12 @@ One file brings up everything, in three flavours (`mode:=sim_only|real_only|both
    - reroute Nav2's final output velocity onto our command bus (`/dt/cmd_vel_raw`) — this is what
      puts the safety gate between Nav2 and the motors;
    - in `sim_only`, auto-seed AMCL at the spawn (no human click needed) and loosen two timing
-     checks that a slow software-rendered LiDAR would otherwise trip.
-4. **Our four nodes** (+ `fake_robot` / `dynamic_obstacle` when their flags are set).
+     checks that a slow software-rendered LiDAR would otherwise trip;
+   - in `both use_fake_robot` (the hardware-free home rig), auto-seed AMCL at the origin too
+     (the fake robot deterministically starts there) and widen the TF/scan timing budgets —
+     the real lab `both` keeps the stock values and the operator's 2D Pose Estimate.
+4. **Our four always-on nodes** (+ `twin_resync` in `both`, + `fake_robot` / `dynamic_obstacle`
+   when their flags are set).
 5. **RViz** — automatically in `real_only`/`both` (the operator *must* click 2D Pose Estimate
    there), opt-in elsewhere.
 
@@ -473,8 +481,11 @@ TurtleBot3 stack is built from source in `~/turtlebot3_ws`, so there the demo ru
 | `docker/build.sh` / `run.sh` (+ `.ps1`) | Build/enter the dev image at home. |
 | `docker/ci.sh` | **The CI gate:** clean `colcon build` + the entire test suite, headless. |
 | `docker/sim_smoke.sh` | Headless end-to-end `sim_only` boot check: Nav2 active, AMCL localized, topics flowing with the right types. |
-| `docker/mission_smoke.sh` + `mission_probe.py` | Headless full-mission check: places a bloom, starts the mission, asserts the robot moved, sprayed, and the bloom turned treated. |
-| `docker/open_sim.sh` | Open the interactive sim with GUI windows (operator console + RViz) under WSLg. |
+| `docker/both_smoke.sh` | Headless hardware-free **`both`** gate: the `/sim/*` mirror up collision-free, the ground-truth pose path flowing, and a LIVE resync round-trip (click → gz set_pose → `/dt/resync_event`). |
+| `docker/mission_smoke.sh` + `mission_probe.py` | Headless full-mission check: places a bloom, starts the mission, asserts the robot moved, sprayed, and the bloom turned treated (a partial `complete (… skipped)` fails it). |
+| `docker/open_sim.sh` / `open_both.sh` | Open the interactive sim / the full hardware-free twin with GUI windows (operator console + RViz) under WSLg or Docker-Desktop WSLg passthrough. |
+| `docker/verify_running.sh` | One-shot liveness check (nodes + key topics) to `docker exec` inside a running demo container. |
+| `docker/probe_ground_truth.sh` / `wslg_test_window.py` | Diagnostics: dump the bridged ground-truth frame names; pop an unmissable green test window to prove the display pipe. |
 | `docker/demo_run.sh` | Convenience demo launcher. |
 
 ---

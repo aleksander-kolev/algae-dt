@@ -23,17 +23,17 @@ docker run --rm -v "$PWD/ros2_ws:/ws" -v "$PWD/docker:/ci" algae-dt:dev bash /ci
 ## Pure libraries (no ROS, unit-tested)
 | Lib | What | Tests |
 |---|---|---|
-| `lib/safety.py` | 25 cm dual-LiDAR fail-safe gate (full-width front sector, NaN/inf, wrap-around, stale→blocked, startup→unblocked, OR-block, per-world staleness budgets, bounds-clamped scan wrapper, command shaping) | `test_safety.py` (31) |
-| `lib/blooms.py` | immutable Bloom/BloomField, nearest_untreated (active not skipped), terminal states | `test_blooms.py` (13) |
-| `lib/sync.py` | pose/sensor error + tolerances + commanded-shadow unicycle | `test_sync.py` (13) |
+| `lib/safety.py` | 25 cm dual-LiDAR fail-safe gate (full-width front sector, NaN/inf, wrap-around, stale→blocked, startup→unblocked, OR-block, per-world staleness budgets, bounds-clamped scan wrapper, command shaping) | `test_safety.py` (34) |
+| `lib/blooms.py` | immutable Bloom/BloomField, nearest_untreated (active not skipped), terminal states | `test_blooms.py` (14) |
+| `lib/sync.py` | pose/sensor error + tolerances + commanded-shadow unicycle | `test_sync.py` (15) |
 | `lib/metrics.py` | command→motion latency, inf-safe CSV row/header (+ `resync` column) | `test_metrics.py` (9) |
 | `lib/resync.py` | bounded-drift resync policy: manual-now / auto-after-SUSTAINED-breach, cooldown-spaced attempts, stale/NaN refusal, immutable state | `test_resync.py` (12) |
 | `lib/gzcli.py` | shared `gz service` CLI helpers (request composition, Boolean-reply parsing, pose proto-text with finite/name validation) | `test_gzcli.py` (9) |
 | `lib/geometry.py` | world↔pixel (floor semantics: off-map stays off-map), yaw↔quaternion, angle wrap, shared pose/MapInfo helpers | `test_geometry.py` (14) |
-| `lib/pgm.py` | P5/P2 parser incl. the real 86×110 course map | `test_pgm.py` (9) |
+| `lib/pgm.py` | P5/P2 parser incl. the real 86×110 course map | `test_pgm.py` (12) |
 | `lib/hud.py` | battery colour thresholds, scan projection, status text | `test_hud.py` (5) |
 | `lib/occupancy.py` | static-map goal projection / `reachable_goal` (off-wall + edge-aware clearance, off-map rejection) + `raycast_scan` (the fake robot's map-true synthetic LiDAR: LDS-02 blind-spot 0.0, no-return inf, range_max, yaw geometry — incl. on the real course map) | `test_occupancy.py` (21) |
-| `lib/trajectory.py` | dynamic-obstacle sinusoidal sweep + spawn keep-out clamp | `test_trajectory.py` (10) |
+| `lib/trajectory.py` | dynamic-obstacle sinusoidal sweep + spawn keep-out clamp | `test_trajectory.py` (11) |
 
 ## Pillar ① — Bidirectional (fan-in / fan-out)
 - **`twin_mediator`** is the single command chokepoint: subscribes `/dt/cmd_vel_raw` (TwistStamped)
@@ -47,7 +47,7 @@ docker run --rm -v "$PWD/ros2_ws:/ws" -v "$PWD/docker:/ci" algae-dt:dev bash /ci
   `/dt/real_pose` / `/dt/sync_error` flowing, live resync round-trip) — re-run it after touching
   `_sim_mirror` (the sim RSP remaps `/tf` `/tf_static` `/robot_description` `/joint_states` onto
   `/sim/*`).
-- Mediator integration: `test_mediator.py` (10).
+- Mediator integration: `test_mediator.py` (16).
 
 ## Pillar ② — Synchronization of states (the differentiator)
 - **`sync_supervisor`** publishes the *measured* `/dt/sync_error` (Δxy, Δyaw, sensor), `/dt/latency_ms`
@@ -60,17 +60,18 @@ docker run --rm -v "$PWD/ros2_ws:/ws" -v "$PWD/docker:/ci" algae-dt:dev bash /ci
   Genuine because `/dt/sim_pose` in `both` is **gz GROUND TRUTH** (`worlds/burger_sim_gt.sdf`
   PosePublisher → `/sim/ground_truth`): the teleport moves pose + LiDAR view + measured error
   together. Live round-trip proven by `docker/both_smoke.sh`.
-- **Proof:** `test_sync_supervisor.py` (12) — in-tolerance vs out-of-tolerance flip + alert, latency
+- **Proof:** `test_sync_supervisor.py` (13) — in-tolerance vs out-of-tolerance flip + alert, latency
   measured, CSV written with the documented columns incl. the one-shot `resync` stamp;
-  `test_twin_resync.py` (6) — manual/auto/transient/failure/mode-guard/stale-input wiring.
+  `test_twin_resync.py` (7) — manual/auto/transient/failure/mode-guard/stale-input wiring + the
+  /dt/localized gate (no fire until AMCL resolves map←odom; a queued click releases on it).
   sim_only sync source = commanded-shadow vs achieved sim pose (mediator integrates the gated
   command into `/dt/real_pose`).
 
 ## Pillar ③ — Environmental (safety + autonomy + live change)
 - **25 cm dual-LiDAR stop on BOTH worlds, fail-safe** — `test_safety.py` (gate logic) +
-  `test_mediator.py` (10) (live zeroing of forward + `/dt/safety`) +
+  `test_mediator.py` (16) (live zeroing of forward + `/dt/safety`) +
   `test_fake_robot.py::test_front_obstacle_triggers_safety_stop_through_mediator` (hardware-free).
-- **Navigate-and-spray with honest accounting** — `test_mission_runner.py` (20): SUCCEEDED→spray+treated,
+- **Navigate-and-spray with honest accounting** — `test_mission_runner.py` (23): SUCCEEDED→spray+treated,
   nav-fail→skipped (no spray), Stop/E-STOP mid-nav→pending.
 - **Live environment change / dynamic obstacle** — `worlds/obstacle_box.sdf` + `dynamic_obstacle`
   (sweep via gz set_pose; path unit-tested in `test_trajectory.py`). Spawn/move it mid-run → the

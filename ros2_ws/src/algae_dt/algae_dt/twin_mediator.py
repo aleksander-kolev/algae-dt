@@ -110,6 +110,13 @@ class TwinMediator(Node):
         self.pub_safety = self.create_publisher(Bool, '/dt/safety', _latched())
         self.pub_estop = self.create_publisher(Bool, '/dt/estop', _latched())
         self.pub_mode = self.create_publisher(String, '/dt/mode', _latched())
+        # Latched localization flag: False until the map<-odom transform (AMCL) first resolves.
+        # Consumers that act on the MAP-frame /dt/real_pose (twin_resync's teleport target!) must
+        # hold off until then — pre-seed the pose is identity-lifted odom with no map meaning, and
+        # an auto-resync 5 s after launch could teleport the mirror into a wall, whose scan then
+        # BLOCKS THE REAL ROBOT through the dual-LiDAR gate. sim_only / both+fake auto-seed AMCL,
+        # so this flips True seconds after startup; real `both` flips on the 2D Pose Estimate.
+        self.pub_localized = self.create_publisher(Bool, '/dt/localized', _latched())
 
         # --- subscriptions ---
         self.create_subscription(TwistStamped, '/dt/cmd_vel_raw', self._on_cmd, 10)
@@ -137,6 +144,8 @@ class TwinMediator(Node):
 
         # latched initial state. In real modes start E-STOP HELD (fail-safe across a mediator
         # restart, see _estop_startup_hold); sim_only starts clear exactly as before.
+        self._localized = False
+        self.pub_localized.publish(Bool(data=False))
         self.pub_mode.publish(String(data=self.mode))
         self._estop_latched = self._estop_manual or self._estop_battery or self._estop_startup_hold
         self._publish_estop()
@@ -157,6 +166,11 @@ class TwinMediator(Node):
             t = self._tf_buffer.lookup_transform('map', 'odom', RclpyTime())
             tr, rot = t.transform.translation, t.transform.rotation
             self._T_map_odom = (tr.x, tr.y, geometry.yaw_from_quaternion(rot.z, rot.w))
+            if not self._localized:                       # first successful lookup = AMCL is up
+                self._localized = True
+                self.pub_localized.publish(Bool(data=True))
+                self.get_logger().info(
+                    "map<-odom resolved: /dt/*_pose are MAP-localized (twin resync armed)")
         except TransformException:
             pass                                          # map<-odom not published yet (normal pre-AMCL)
         except Exception as exc:                          # anything else is a real fault -> surface it

@@ -58,9 +58,10 @@ runtime failure), **C) coding & process conventions**.
    `center_tol_m` gross check sprays and marks treated. `nav_failed`/`nav_timeout` → bloom skipped
    (grey). A spray cut short by Stop/E-STOP leaves the bloom PENDING (honest), not treated.
 8. **Generous `center_tol_m` (0.5 m), sim-only.** Nav2's `xy_goal_tolerance` (0.15) on the
-   controller TF pose is authoritative arrival. The gross check uses ground-truth/odom pose which
-   lags during deceleration — a tight margin false-rejects real arrivals. In `real_only`/`both`,
-   `/dt/real_pose` is odom-frame and not map-comparable, so the gross check runs ONLY in sim.
+   controller TF pose is authoritative arrival. The gross check uses the measured pose, which
+   lags during deceleration — a tight margin false-rejects real arrivals. In `real_only`/`both`
+   the gross check is OFF: `/dt/real_pose` IS map-frame (AMCL map←odom lift), but AMCL noise/lag
+   must never veto an arrival Nav2 itself confirmed on the same estimate.
 9. **`ROS_DOMAIN_ID = robot number` on both sides**, same Wi-Fi. Mismatch → zero topics cross.
 10. **Isolate back-to-back full-stack sim tests by `ROS_DOMAIN_ID`** (+ a settle delay): sequential
     gz+Nav2 stacks on one domain collide (duplicate nodes → `planner_server` SIGABRT).

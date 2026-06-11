@@ -571,7 +571,11 @@ def test_spray_completes_on_a_slow_sim_that_keeps_progressing():
     try:
         assert _spin_until(ex, lambda: len(_markers_by_id(har)) == 1)
         har.send('start')
-        assert _spin_until(ex, lambda: _markers_by_id(har).get(0) == B.TREATED, secs=15), \
+        # 30 s, not 15: this test's whole premise is that slow-but-progressing must finish, and a
+        # CPU-loaded CI host (e.g. a demo container running alongside) slows the harness loop the
+        # same way it slows the simulated robot — a tight wall deadline re-creates the very
+        # time-cap false-skip the test exists to forbid.
+        assert _spin_until(ex, lambda: _markers_by_id(har).get(0) == B.TREATED, secs=30), \
             "slow-but-progressing rotation must finish the count, never be skipped by a time cap"
         assert har.sim_yaw == pytest.approx(revs * 2.0 * math.pi, rel=0.2)
     finally:

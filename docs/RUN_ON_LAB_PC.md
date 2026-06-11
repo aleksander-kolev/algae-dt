@@ -109,7 +109,8 @@ the arena, so the real start never matches the origin — you must tell AMCL the
    the real robot** (or press **RESYNC TWIN** in the GUI). Wait for the SYNC banner to go green
    ("resynced (auto) …"), then Start. The same correction fires any time drift exceeds the
    documented tolerance mid-session — it's logged in the CSV `resync` column, a demo beat, not a
-   failure.
+   failure. (Resync is **gated on localization**: clicks before the pose estimate queue safely and
+   execute once AMCL resolves — the pre-seed pose has no map meaning, so nothing fires on it.)
 
 ## Prerequisites (the script errors clearly if any fail)
 - **A healthy native workspace + runtime deps** — the §0 checklist: `turtlebot3_*` from

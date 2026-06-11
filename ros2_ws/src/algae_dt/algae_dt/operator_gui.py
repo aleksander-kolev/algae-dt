@@ -353,7 +353,8 @@ def _make_window(bridge: GuiBridge):
             self.buttons['RESYNC TWIN'].setEnabled(False)
             self.buttons['RESYNC TWIN'].setToolTip(
                 "Snap the sim twin onto the real robot's pose (both mode; also fires "
-                "automatically when the sync error stays out of tolerance)")
+                "automatically when the sync error stays out of tolerance). Queues until "
+                "AMCL is localized — do the RViz 2D Pose Estimate first.")
 
             root = QtWidgets.QHBoxLayout(self)
             root.addWidget(self.canvas, 3)

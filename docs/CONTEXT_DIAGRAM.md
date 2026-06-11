@@ -22,11 +22,13 @@ packages, the operator, the real robot, the sim, and any online source are exter
                                   │  │  latched /dt/estop                        │ │
    ┌───────────────┐  /sim/scan   │  └───────────┬──────────────────────────────┘ │
    │  SIM BURGER   │  /sim/odom   │              │ /dt/sync_error /dt/latency_ms    │
-   │ (turtlebot3_  │ ───────────▶ │  ┌───────────▼───────────┐                     │
-   │  gazebo +     │              │  │   sync_supervisor      │ ── /dt/alerts ────▶ │ (GUI + CSV log)
-   │  Nav2/AMCL)   │ ◀/sim/cmd_vel│  │  pose/sensor Δ, latency│ ── /dt/sync_ok ───▶ │
-   └───────────────┘              │  │  vs twin.yaml tolerances│                    │
-                                  │  └────────────────────────┘                    │
+   │ (turtlebot3_  │ /sim/ground_ │  ┌───────────▼───────────┐  ┌────────────────┐ │
+   │  gazebo +     │  truth ─────▶ │  │   sync_supervisor      │  │  twin_resync   │ │
+   │  PosePublisher│              │  │  pose/sensor Δ, latency│  │ (both: snap sim│ │
+   │  + Nav2/AMCL) │ ◀/sim/cmd_vel│  │  vs twin.yaml tolerances│ │  onto real pose│ │
+   └───────▲───────┘              │  └─────┬──────────────────┘  └───────┬────────┘ │
+           │ gz set_pose (teleport)        │ /dt/alerts /dt/sync_ok ──▶ (GUI+CSV)   │
+           └──────────────────────│────────│────────────────────────────┘          │
    ┌───────────────┐  weather/UV  │   (OPTIONAL T6.1b context_adapter:              │
    │ ONLINE SOURCE │ ───────────▶ │    online source → cautious mode in both worlds)│
    │ (Open-Meteo)  │              └──────────────────────────────────────────────┘
@@ -34,9 +36,12 @@ packages, the operator, the real robot, the sim, and any online source are exter
 ```
 
 **Boundary flows (the graded bidirectional contract):**
-- **In:** real `/scan /odom /battery_state`; sim `/sim/scan /sim/odom` (sim pose derived from
-  `/sim/odom`); operator clicks; (optional) online source.
-- **Out:** `/cmd_vel`(TwistStamped→real), `/sim/cmd_vel`(→sim), `/dt/*` state to the GUI + CSV.
+- **In:** real `/scan /odom /battery_state`; sim `/sim/scan /sim/odom` (motion/stop-skew) +
+  `/sim/ground_truth` (the `both`-mode `/dt/sim_pose` source — gz PosePublisher, world==map frame);
+  operator clicks; (optional) online source.
+- **Out:** `/cmd_vel`(TwistStamped→real), `/sim/cmd_vel`(→sim), gz `set_pose` (twin_resync's
+  bounded-drift teleport of the mirror, operator/auto, gated on `/dt/localized`), `/dt/*` state to
+  the GUI + CSV.
 - **Single chokepoint:** all motion commands pass through `twin_mediator` (fan-in/fan-out + safety).
 
 **External (reused, not ours):** `turtlebot3_gazebo`, `turtlebot3_navigation2` (Nav2/AMCL),

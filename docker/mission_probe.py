@@ -96,7 +96,9 @@ def main():
     deadline = time.time() + timeout
     while time.time() < deadline:
         rclpy.spin_once(p, timeout_sec=0.2)
-        if _treated(p.markers) or (p.states and p.states[-1] == 'complete'):
+        # plain 'complete' = all treated; 'complete (N treated, M skipped)' = a PARTIAL mission —
+        # break on both (the partial fails the treated check below) instead of idling to timeout
+        if _treated(p.markers) or (p.states and p.states[-1].startswith('complete')):
             break
 
     treated = _treated(p.markers)

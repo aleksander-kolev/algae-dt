@@ -26,8 +26,9 @@ packages**. So:
   `/sim/cmd_vel`. Never let Nav2 or teleop drive a robot directly — remap their `cmd_vel` to
   `/dt/cmd_vel_raw`. (Course Mini-Project-3 contract; we generalise it to autonomy.)
 - **Sync with documented tolerances + alerts (don't skip this).** Publish the *measured* numbers, not
-  just a boolean: `/dt/sync_error` (Δxy, Δyaw, sensor-range delta), `/dt/latency_ms` (command→motion,
-  scan age). Compare against documented thresholds in `config/twin.yaml`; when out of tolerance,
+  just a boolean: `/dt/sync_error` (Δxy, Δyaw, sensor-range delta), `/dt/latency_ms` (command→motion
+  only; scan age is gated separately by the mediator's staleness budgets). Compare against
+  documented thresholds in `config/twin.yaml`; when out of tolerance,
   publish `/dt/alerts` AND append a CSV row. This is the course's "measured latency and sync error
   reported, tolerance thresholds documented, alerts/logging when out of tolerance" — the single
   highest-value, most-overlooked deliverable.
@@ -35,8 +36,8 @@ packages**. So:
   suspenders to Nav2's costmap, and the explicit course "25 cm stops both robots" requirement.
 - **Distributed state on topics, latched.** `/dt/estop`, `/dt/mode`, `/dt/sync_ok` are latched so a
   late subscriber (GUI) gets the current value. Bump transient state pubs (mission_state) to
-  latched-depth-10 so fast transitions (`nav_failed`→`complete`) aren't dropped; assert the STABLE
-  final marker colour in tests, not transient states.
+  latched-depth-10 so fast transitions (`navigating:N`→`complete (… skipped)`) aren't dropped;
+  assert the STABLE final marker colour in tests, not transient states.
 - **Honest task accounting.** Spray + mark-treated only on full-duration spin after Nav2 SUCCEEDED.
   Aborted/short spray → bloom stays pending. Nav failure → grey/skipped. Prevents a half-treated
   bloom being wrongly skipped next start by `nearest_untreated`.

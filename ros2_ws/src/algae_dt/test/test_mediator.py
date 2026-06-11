@@ -180,6 +180,35 @@ def test_sim_pose_published_in_map_frame_via_tf(world):
         bc.destroy_node()
 
 
+def test_localized_flag_flips_true_when_map_odom_appears(world):
+    """/dt/localized is the latched gate twin_resync fires behind: it must start False (pre-AMCL
+    the map<-odom transform does not exist and /dt/real_pose has no map meaning) and flip True on
+    the first successful map<-odom lookup."""
+    from geometry_msgs.msg import TransformStamped
+    from tf2_ros import StaticTransformBroadcaster
+
+    har, ex = world
+    got = {'v': None}
+    har.create_subscription(Bool, '/dt/localized', lambda m: got.update(v=m.data), _latched())
+    assert _spin_until(ex, lambda: got['v'] is False), "starts UNLOCALIZED (latched False)"
+
+    bc = rclpy.create_node('tf_localize_bc')
+    stb = StaticTransformBroadcaster(bc)
+    tf = TransformStamped()
+    tf.header.frame_id = 'map'
+    tf.child_frame_id = 'odom'
+    tf.transform.translation.x = 0.5
+    tf.transform.rotation.w = 1.0
+    stb.sendTransform(tf)
+    ex.add_node(bc)
+    try:
+        assert _spin_until(ex, lambda: got['v'] is True, secs=8.0), \
+            "first successful map<-odom lookup must latch /dt/localized True"
+    finally:
+        ex.remove_node(bc)
+        bc.destroy_node()
+
+
 def test_sim_only_sync_source_none_suppresses_shadow_pose():
     """sim_only_sync_source is wired: 'none' suppresses the commanded-shadow /dt/real_pose while the
     sim pose still mirrors from /odom (F14)."""

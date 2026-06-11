@@ -29,7 +29,7 @@ full `bringup.launch.py` (sim_only | real_only | both, with `headless`/`use_rviz
 in `worlds/burger_sim_gt.sdf`) and **bounded-drift resync** (`twin_resync`: GUI RESYNC button +
 auto-correct on sustained out-of-tolerance, CSV-stamped; live round-trip gated by
 `docker/both_smoke.sh`); reproducible **`algae-dt:dev`** Docker image (`docker/`, `docs/DOCKER.md`).
-**239 tests pass** + clean `colcon build`. The five old open items are RESOLVED & verified in-container:
+**252 tests pass** + clean `colcon build`. The five old open items are RESOLVED & verified in-container:
 (1) `mode:=sim_only` smoke-tested (Nav2 active + AMCL localized, `/scan` flows) — `docker/sim_smoke.sh`;
 (2) gz↔ROS bridge confirmed (the stock spawn bundles `parameter_bridge`; `/scan /odom /cmd_vel /clock`
 reach ROS); (3) `both` `/sim/*` namespacing done (custom bridge + namespaced RSP, collision-free);
@@ -62,7 +62,7 @@ reach ROS); (3) `both` `/sim/*` namespacing done (custom bridge + namespaced RSP
    `mode:=real_only` via a manual `ros2 launch`) (`docs/RUN_ON_LAB_PC.md`). Validate the 25 cm stop on real `/scan`, AMCL
    2D-Pose-Estimate, one bloom navigate+spray, the `both` mirror.
 3. **Verify anytime:** `docker run --rm -v "$PWD/ros2_ws:/ws" -v "$PWD/docker:/ci" algae-dt:dev bash
-   /ci/ci.sh` (239 tests + build); `bash /ci/sim_smoke.sh` (sim_only stack) and `bash
+   /ci/ci.sh` (252 tests + build); `bash /ci/sim_smoke.sh` (sim_only stack) and `bash
    /ci/both_smoke.sh` (live `both` mirror: ground-truth pose path + a real resync round-trip).
    Evidence map: `docs/VERIFICATION.md`.
 

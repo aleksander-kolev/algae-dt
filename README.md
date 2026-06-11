@@ -54,7 +54,7 @@ home with a kinematic stand-in, no hardware).
 
 ## Status
 **Implemented and tested.** All 11 pure libs + 5 nodes (+ `fake_robot`, `dynamic_obstacle`) are
-done with **239 passing tests** (unit + in-process rclpy integration) and a clean
+done with **252 passing tests** (unit + in-process rclpy integration) and a clean
 `colcon build --packages-select algae_dt`. `sim_only` launches end-to-end headless (Nav2 active +
 AMCL auto-localized, the TwistStamped chokepoint, all `/dt/*` flowing); `both` keeps the real (bare)
 and sim (`/sim/*`) topics collision-free with the mediator fanning out to both, publishes the sim's

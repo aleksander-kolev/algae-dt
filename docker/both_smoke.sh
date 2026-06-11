@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Headless `both`-mode integration smoke test (hardware-free: use_fake_robot). Verifies the parts
 # of the twin only a LIVE Gazebo can prove — the /sim/* mirror bridge, the GROUND-TRUTH sim pose
-# path (gz dynamic_pose/info -> /sim/ground_truth -> /dt/sim_pose), and a REAL resync round-trip:
+# path (PosePublisher /model/burger_sim/pose -> /sim/ground_truth -> /dt/sim_pose), and a REAL
+# resync round-trip:
 # /dt/resync_cmd -> twin_resync policy -> gz set_pose against the running server -> /dt/resync_event.
 # Run inside algae-dt:dev with /ws + /ci mounted:
 #   docker run --rm -v "$PWD/ros2_ws:/ws" -v "$PWD/docker:/ci" algae-dt:dev bash /ci/both_smoke.sh
@@ -43,9 +44,9 @@ ty=$(ros2 topic type /sim/ground_truth 2>/dev/null)
 if [ "$ty" = "tf2_msgs/msg/TFMessage" ]; then ok "/sim/ground_truth -> $ty"
 else fail "/sim/ground_truth type is '${ty:-MISSING}', expected tf2_msgs/msg/TFMessage (bridge entry)"; fi
 
-echo "=== ground-truth pose path (gz dynamic_pose/info -> bridge -> mediator) ==="
-# /sim/ground_truth must FLOW (the scene broadcaster + bridge work), and /dt/sim_pose must be
-# derived from it (the mediator's both-mode source). /dt/real_pose comes from the fake robot.
+echo "=== ground-truth pose path (gz PosePublisher -> bridge -> mediator) ==="
+# /sim/ground_truth must FLOW (the burger_sim_gt.sdf PosePublisher + bridge work), and
+# /dt/sim_pose must derive from it (the mediator's both-mode source). /dt/real_pose = fake robot.
 for t in /sim/ground_truth /dt/sim_pose /dt/real_pose /dt/sync_error; do
   out=""
   for _ in 1 2 3 4; do

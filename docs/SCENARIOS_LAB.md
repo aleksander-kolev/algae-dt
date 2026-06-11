@@ -56,6 +56,14 @@ Concise run scenarios. Setup commands → `docs/SETUP.md`. Each scenario: **step
 ## Edge cases
 - **S-EDGE-A no motion:** Nav2 publishing `Twist` not `TwistStamped` → set `enable_stamped_cmd_vel:true`
   on Nav2 (params_file). `ros2 topic type /dt/cmd_vel_raw /cmd_vel` to diagnose.
+- **S-EDGE-F sensor-delta flicker at the 3.5 m boundary:** facing a sightline ~3.35–3.65 m (the
+  LDS-02 / gz validity edge), real and sim straddle "valid vs no-return" semi-independently →
+  `/dt/sync_ok` flaps + sync alerts re-fire. Cosmetic (the gate is unaffected; resync ignores the
+  sensor component). Park the demo facing nearer geometry if it distracts.
+- **S-EDGE-G mid-spray resync:** the 2.8 rad/s spray can hold `dyaw` past tolerance longer than
+  `resync_sustain_s` → expect at most one auto-resync per spray (cooldown-spaced). Harmless — the
+  spin count is real-odom-based — and it lands honestly in the CSV `resync` column. Set
+  `resync_auto_enable:=false` for a fully operator-controlled take.
 - **S-EDGE-B battery sag:** real V ≤ 10.5 → auto-E-STOP latches mid-mission. Start >12 V; RESUME after.
 - **S-EDGE-C AMCL re-seed:** any AMCL/Nav2 restart re-seeds to map origin → redo 2D Pose Estimate.
 - **S-EDGE-D Wi-Fi drop / scan stale:** safety gate fails SAFE (stale considered-scan → blocked).
